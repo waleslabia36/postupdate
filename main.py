@@ -6,33 +6,50 @@ CRYPTO BARTA — সম্পূর্ণ ফ্রি ও স্বয়ংক
 পেইড বিলিং লাগবে না।
 
 কাজের ধাপ (Pipeline):
-  ০. প্রথমবার চালু হলে ৫টি স্যাম্পল/টেস্ট নিউজ পাঠিয়ে পুরো পাইপলাইন যাচাই
-     করে নেয় (মিডিয়া হ্যান্ডলিং ও Pollinations.ai ছবি জেনারেশন সহ)।
-  ১. RSS ফিড ও X/Twitter (Nitter RSS) থেকে ব্রেকিং ক্রিপ্টো নিউজ সংগ্রহ করা হয়।
+  ১. RSS ফিড (CoinDesk, Decrypt) ও X/Twitter (Nitter RSS — Cointelegraph,
+     tier10k, whale_alert) থেকে ব্রেকিং ক্রিপ্টো নিউজ সংগ্রহ করা হয়।
+     Cointelegraph কে ওয়েবসাইট RSS থেকে সরিয়ে তাদের অফিসিয়াল X অ্যাকাউন্টে
+     আনা হয়েছে, যাতে আরও দ্রুত ব্রেকিং আপডেট পাওয়া যায়। কোনো X পোস্টে
+     ভিডিও/GIF থাকলে সেটা কখনোই ডাউনলোড/পাঠানো হয় না — বরং ছবি-বিহীন ধরে
+     Pollinations.ai দিয়ে AI ছবি জেনারেট করে পাঠানো হয়।
   ২. Gemini "gemini-3.5-flash-lite" মডেল (ফ্রি, দিনে ১৫০০ রিকোয়েস্ট কোটা;
      কোটা/রেট-লিমিটে ব্যর্থ হলে "gemini-3.1-flash-lite" এ স্বয়ংক্রিয়
      ফলব্যাক) দিয়ে খবরটি পড়ে মূল ঘটনার ১০০-১৫০ অক্ষরের একটি বাংলা "কোর
      ইনসিডেন্ট সামারি" হেডলাইন এবং প্রাসঙ্গিক ইমোজি তৈরি করা হয় (জেনেরিক
      টিজার বাক্য নয়)।
   ৩. SQLite ডাটাবেসে লিংক সেভ রেখে ডুপ্লিকেট আটকানো হয় + TF-IDF cosine
-     similarity দিয়ে একই ধরনের (৭৫%+ মিল) খবর বাদ দেওয়া হয়।
+     similarity দিয়ে সব সোর্স (RSS/Twitter, যেকোনো অ্যাকাউন্ট) জুড়ে একই
+     ধরনের (৭৫%+ মিল) খবর বাদ দেওয়া হয় — একই ঘটনা Decrypt, CoinDesk বা
+     আলাদা X অ্যাকাউন্ট থেকে দ্বিতীয়বার এলেও সেটা পোস্ট হয় না।
   ৪. খবরে ছবি থাকলে সেটি পাঠানো হয়; না থাকলে Pollinations.ai (সম্পূর্ণ ফ্রি,
      কোনো API key লাগে না) দিয়ে নিরাপদ/টেক্সট-বিহীন ছবি বানিয়ে পাঠানো হয়।
   ৫. টেলিগ্রাম চ্যানেলে নির্দিষ্ট ফরম্যাটে পোস্ট করে, তারপর আবার লুপ শুরু হয়
      (while True) — এভাবে ২৪/৭ চলতে থাকে।
+  ৬. এর পাশাপাশি একটি আলাদা ব্যাকগ্রাউন্ড থ্রেডে BTC/USDT ও ETH/USDT এর
+     লাইভ স্পট প্রাইস প্রতি ৩০-৪৫ সেকেন্ডে Binance (ফলব্যাক: CoinGecko)
+     পাবলিক API দিয়ে চেক করা হয়। ETH প্রতি $৫০ এবং BTC প্রতি $৫০০ মাইলস্টোন
+     অতিক্রম করলে (উপরে ↑ বা নিচে ↓) Pollinations.ai দিয়ে একটি 3D আর্ট
+     জেনারেট করে একলাইনের ক্যাপশনসহ চ্যানেলে পোস্ট করা হয়। একই মাইলস্টোনের
+     আশেপাশে দাম ঘোরাঘুরি করলে ডুপ্লিকেট অ্যালার্ট যায় না — শেষ ট্রিগার হওয়া
+     মাইলস্টোন SQLite তে সেভ থাকে।
 
-সব সিক্রেট/টোকেন os.getenv() দিয়ে পড়া হয় — কোনো কিছুই কোডে হার্ডকোড করা নেই।
+শুধুমাত্র ৩টি আবশ্যক ক্রেডেনশিয়াল (TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID,
+GEMINI_API_KEY) os.getenv() দিয়ে পড়া হয়। বাকি সব (অপশনাল) সেটিং কোডের
+Config ক্লাসেই হার্ডকোড করা — Railway তে এর বাইরে আর কিছু সেট করার দরকার
+নেই।
 """
 
 import os
 import re
 import io
 import json
+import math
 import time
 import random
 import sqlite3
 import logging
 import hashlib
+import threading
 import urllib.parse
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
@@ -54,87 +71,95 @@ except ImportError:  # google-genai লাইব্রেরি ইনস্ট�
 # লগিং সেটআপ — Railway এর Logs ট্যাবে এগুলো দেখা যাবে
 # ---------------------------------------------------------------------------
 logging.basicConfig(
-    level=os.getenv("LOG_LEVEL", "INFO"),
+    level="INFO",
     format="%(asctime)s | %(levelname)-8s | %(message)s",
 )
 log = logging.getLogger("crypto-barta")
 
 
 # ---------------------------------------------------------------------------
-# কনফিগারেশন — সব ভ্যালু Environment Variable থেকে আসবে (কোনো হার্ডকোড নেই)
+# কনফিগারেশন
 # ---------------------------------------------------------------------------
-def env_list(name: str, default: str = "") -> List[str]:
-    """কমা দিয়ে আলাদা করা এনভায়রনমেন্ট ভ্যারিয়েবলকে লিস্টে রূপান্তর করে।"""
-    raw = os.getenv(name, default)
-    return [x.strip() for x in raw.split(",") if x.strip()]
-
-
+# শুধুমাত্র ৩টি আবশ্যক ক্রেডেনশিয়াল Environment Variable থেকে আসে —
+# TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID, GEMINI_API_KEY। বাকি সব
+# (অপশনাল) সেটিং সরাসরি নিচে কোডেই হার্ডকোড করা — Railway তে আলাদা করে
+# আর কিছু সেট করার দরকার নেই। কোনো সেটিং বদলাতে চাইলে সরাসরি এখানে এসে
+# ভ্যালু পাল্টে দিলেই হবে।
 class Config:
-    # ---- আবশ্যক (Required) — এই ৩টি ছাড়া বট চলবে না ----
+    # ---- আবশ্যক (Required) — শুধু এই ৩টি Railway এনভায়রনমেন্ট ভ্যারিয়েবল ----
     TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
     TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "")
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
-    # ---- AI মডেল ----
-    # বাগ #1 ফিক্স: আগে "gemini-3.8-flash" ব্যবহার হতো যার ফ্রি-টিয়ার কোটা
-    # মাত্র ২০ রিকোয়েস্ট/দিন — ফলে বারবার 429 RESOURCE_EXHAUSTED এরর আসছিল।
-    # এখন ডিফল্ট মডেল "gemini-3.5-flash-lite" — এর ফ্রি কোটা দিনে ১৫০০
-    # রিকোয়েস্ট। প্রাইমারি মডেল কোটা/রেট-লিমিটে ব্যর্থ হলে কোডেই স্বয়ংক্রিয়ভাবে
-    # ফলব্যাক মডেল "gemini-3.1-flash-lite" দিয়ে আবার চেষ্টা করা হয়।
-    GEMINI_TEXT_MODEL = os.getenv("GEMINI_TEXT_MODEL", "gemini-3.5-flash-lite")
-    GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.1-flash-lite")
+    # ---- AI মডেল (হার্ডকোড) ----
+    # "gemini-3.5-flash-lite" — ফ্রি কোটা দিনে ১৫০০ রিকোয়েস্ট। প্রাইমারি
+    # মডেল কোটা/রেট-লিমিটে ব্যর্থ হলে কোডেই স্বয়ংক্রিয়ভাবে ফলব্যাক মডেল
+    # "gemini-3.1-flash-lite" দিয়ে আবার চেষ্টা করা হয়।
+    GEMINI_TEXT_MODEL = "gemini-3.5-flash-lite"
+    GEMINI_FALLBACK_MODEL = "gemini-3.1-flash-lite"
 
-    # ---- Gemini API কলের মধ্যে রেট-লিমিট বিরতি (বাগ #1 ফিক্স) ----
+    # ---- Gemini API কলের মধ্যে রেট-লিমিট বিরতি (হার্ডকোড) ----
     # প্রতিটি Gemini কলের পর ৩-৫ সেকেন্ড এলোমেলো বিরতি দেওয়া হয়, যাতে
     # হঠাৎ অনেকগুলো রিকোয়েস্ট একসাথে গিয়ে বার্স্ট-লিমিটে না পড়ে।
-    AI_CALL_MIN_DELAY = float(os.getenv("AI_CALL_MIN_DELAY", "3"))
-    AI_CALL_MAX_DELAY = float(os.getenv("AI_CALL_MAX_DELAY", "5"))
+    AI_CALL_MIN_DELAY = 3.0
+    AI_CALL_MAX_DELAY = 5.0
 
     # ---- ছবি জেনারেশন (সম্পূর্ণ ফ্রি — Pollinations.ai, কোনো key লাগে না) ----
-    ENABLE_AI_IMAGE = os.getenv("ENABLE_AI_IMAGE", "true").lower() == "true"
-    POLLINATIONS_BASE = os.getenv(
-        "POLLINATIONS_BASE", "https://image.pollinations.ai/prompt"
-    )
-    POLLINATIONS_WIDTH = os.getenv("POLLINATIONS_WIDTH", "1024")
-    POLLINATIONS_HEIGHT = os.getenv("POLLINATIONS_HEIGHT", "1024")
+    ENABLE_AI_IMAGE = True
+    POLLINATIONS_BASE = "https://image.pollinations.ai/prompt"
+    POLLINATIONS_WIDTH = "1024"
+    POLLINATIONS_HEIGHT = "1024"
 
     # ---- নিউজ সোর্স (RSS ফিড — সব ফ্রি ও পাবলিক) ----
-    RSS_FEEDS = env_list(
-        "RSS_FEEDS",
-        ",".join(
-            [
-                "https://cointelegraph.com/rss",
-                "https://www.coindesk.com/arc/outboundfeeds/rss/",
-                "https://decrypt.co/feed",
-            ]
-        ),
-    )
+    # Cointelegraph এর ওয়েবসাইট RSS বাদ দেওয়া হয়েছে — ব্রেকিং আপডেটের জন্য
+    # এখন তাদের অফিসিয়াল X অ্যাকাউন্ট (নিচে TWITTER_USERNAMES এ) থেকে
+    # সরাসরি ফলো করা হয়, যা ওয়েবসাইট RSS এর চেয়ে অনেক দ্রুত।
+    RSS_FEEDS = [
+        "https://www.coindesk.com/arc/outboundfeeds/rss/",
+        "https://decrypt.co/feed",
+    ]
 
     # ---- X/Twitter সোর্স (Nitter RSS — ফ্রি, কোনো পেইড Twitter API লাগে না) ----
-    ENABLE_TWITTER = os.getenv("ENABLE_TWITTER", "true").lower() == "true"
-    NITTER_BASE = os.getenv("NITTER_BASE", "https://nitter.net")
-    TWITTER_USERNAMES = env_list("TWITTER_USERNAMES", "tier10k,whale_alert")
+    ENABLE_TWITTER = True
+    NITTER_BASE = "https://nitter.net"
+    # Cointelegraph এর অফিসিয়াল X অ্যাকাউন্ট যোগ করা হয়েছে — এখন থেকে
+    # তাদের ব্রেকিং আপডেট সরাসরি X ফিড থেকেই আসবে (ওয়েবসাইট RSS এর বদলে)।
+    TWITTER_USERNAMES = ["Cointelegraph", "tier10k", "whale_alert"]
 
-    # ---- স্টোরেজ / ডুপ্লিকেট চেক ----
-    DB_PATH = os.getenv("DB_PATH", "/data/news.db")
-    SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.75"))
-    SIMILARITY_WINDOW = int(os.getenv("SIMILARITY_WINDOW", "50"))
+    # ---- স্টোরেজ / ডুপ্লিকেট চেক (হার্ডকোড) ----
+    DB_PATH = "/data/news.db"
+    # TF-IDF cosine similarity — RSS/Twitter, যেকোনো সোর্স থেকে আসা খবরকে
+    # শেষ ৫০টি পোস্ট হওয়া হেডলাইনের সাথে তুলনা করে ৭৫%+ মিল পেলে বাদ দেয়।
+    # এই চেক সব সোর্সের জন্য অভিন্ন (cross-source) — নিচে বিস্তারিত ব্যাখ্যা।
+    SIMILARITY_THRESHOLD = 0.75
+    SIMILARITY_WINDOW = 50
 
-    # ---- প্রথম রানে টেস্ট নিউজ পাঠানো হবে কিনা ----
-    # সিড/টেস্ট নিউজ ফিচার সম্পূর্ণভাবে বন্ধ (main() থেকে আর কল হয় না);
-    # ডিফল্ট মান "false" করে রাখা হয়েছে বাড়তি নিরাপত্তার জন্য।
-    ENABLE_SEED_TEST = os.getenv("ENABLE_SEED_TEST", "false").lower() == "true"
+    # ---- সিড/টেস্ট নিউজ ফিচার — সম্পূর্ণ বন্ধ (main() থেকে আর কল হয় না) ----
+    ENABLE_SEED_TEST = False
 
-    # ---- লুপ কনফিগারেশন ----
-    POLL_INTERVAL_SECONDS = int(os.getenv("POLL_INTERVAL_SECONDS", "90"))
-    POST_DELAY_SECONDS = int(os.getenv("POST_DELAY_SECONDS", "5"))
-    MAX_ITEMS_PER_CYCLE = int(os.getenv("MAX_ITEMS_PER_CYCLE", "5"))
+    # ---- লুপ কনফিগারেশন (হার্ডকোড) ----
+    POLL_INTERVAL_SECONDS = 90
+    POST_DELAY_SECONDS = 5
+    MAX_ITEMS_PER_CYCLE = 5
 
     # ---- হেডলাইনের অক্ষরসংখ্যার সীমা ----
     HEADLINE_MIN_CHARS = 100
     HEADLINE_MAX_CHARS = 150
 
     FOLLOW_CHANNEL_URL = "https://t.me/cryptobartalove1"
+
+    # ---- BTC/ETH প্রাইস মাইলস্টোন অ্যালার্ট (হার্ডকোড) ----
+    ENABLE_PRICE_ALERTS = True
+    # ফ্রি, কোনো key লাগে না। Binance ব্যর্থ হলে (রিজিওন-ব্লক ইত্যাদি)
+    # স্বয়ংক্রিয়ভাবে CoinGecko তে ফলব্যাক করা হয়।
+    BINANCE_TICKER_URL = "https://api.binance.com/api/v3/ticker/price"
+    COINGECKO_PRICE_URL = "https://api.coingecko.com/api/v3/simple/price"
+    # প্রতি ৩০-৪৫ সেকেন্ডে (এলোমেলো) দাম চেক করা হয়
+    PRICE_CHECK_MIN_SECONDS = 30
+    PRICE_CHECK_MAX_SECONDS = 45
+    # মাইলস্টোন স্টেপ — ETH প্রতি $৫০, BTC প্রতি $৫০০
+    ETH_MILESTONE_STEP = 50
+    BTC_MILESTONE_STEP = 500
 
 
 def validate_config():
@@ -210,6 +235,19 @@ def get_db() -> sqlite3.Connection:
         )
         """
     )
+    # price_milestones টেবিলটি BTC/ETH এর সর্বশেষ ট্রিগার হওয়া মাইলস্টোন
+    # সংরক্ষণ করে, যাতে একই মাইলস্টোনের আশেপাশে দাম ঘোরাঘুরি করলে
+    # ডুপ্লিকেট অ্যালার্ট না যায় — শুধু নতুন মাইলস্টোন ক্রস করলেই একবার যায়।
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS price_milestones (
+            symbol TEXT PRIMARY KEY,
+            last_milestone REAL NOT NULL,
+            last_price REAL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
     conn.commit()
     return conn
 
@@ -264,6 +302,37 @@ def mark_seed_done(conn: sqlite3.Connection):
     conn.execute(
         "INSERT INTO bot_meta (key, value) VALUES ('seed_completed', 'true') "
         "ON CONFLICT(key) DO UPDATE SET value='true'"
+    )
+    conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# BTC/ETH প্রাইস মাইলস্টোন — SQLite এ সর্বশেষ ট্রিগার হওয়া মাইলস্টোন সেভ রাখা
+# ---------------------------------------------------------------------------
+def get_last_milestone(conn: sqlite3.Connection, symbol: str) -> Optional[float]:
+    """এই সিম্বলের (BTCUSDT/ETHUSDT) জন্য সর্বশেষ ট্রিগার হওয়া মাইলস্টোন
+    ডাটাবেস থেকে নিয়ে আসে। কখনো ট্র্যাক করা না হয়ে থাকলে None রিটার্ন করে —
+    এই None-ই নির্দেশ করে যে এটাই প্রথমবার, তাই প্রথম চেকে কোনো অ্যালার্ট
+    পাঠানো হয় না (শুধু বেসলাইন সেভ করা হয়)।"""
+    cur = conn.execute(
+        "SELECT last_milestone FROM price_milestones WHERE symbol=?", (symbol,)
+    )
+    row = cur.fetchone()
+    return float(row[0]) if row is not None else None
+
+
+def save_milestone(conn: sqlite3.Connection, symbol: str, milestone: float, price: float):
+    """নতুন মাইলস্টোন ও সেই মুহূর্তের আসল দাম ডাটাবেসে সেভ/আপডেট করে।"""
+    conn.execute(
+        """
+        INSERT INTO price_milestones (symbol, last_milestone, last_price, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(symbol) DO UPDATE SET
+            last_milestone=excluded.last_milestone,
+            last_price=excluded.last_price,
+            updated_at=excluded.updated_at
+        """,
+        (symbol, milestone, price, datetime.now(timezone.utc).isoformat()),
     )
     conn.commit()
 
@@ -469,11 +538,48 @@ def dedupe_image_urls(urls: List[str]) -> List[str]:
     return unique
 
 
+def entry_has_video(entry) -> bool:
+    """একটি RSS/Nitter এন্ট্রিতে ভিডিও, GIF, বা ভিডিও-থাম্বনেইল আছে কিনা
+    শনাক্ত করে (media:content এর medium/type, enclosure লিংকের type, অথবা
+    HTML বডির ভেতরে <video> ট্যাগ/.mp4 লিংক দেখে)। এই ফাংশনটি বাগ ফিক্স
+    হিসেবে যোগ করা হয়েছে — X/Twitter পোস্টে ভিডিও থাকলে সেটা কখনোই সরাসরি
+    ডাউনলোড/পাঠানো হয় না; বরং ছবি-বিহীন ধরে Pollinations.ai দিয়ে AI ছবি
+    জেনারেট করে পাঠানো হয় (fetch_rss_news/fetch_twitter_news দ্রষ্টব্য)।"""
+    for m in getattr(entry, "media_content", []) or []:
+        medium = str(m.get("medium", "")).lower()
+        mtype = str(m.get("type", "")).lower()
+        if medium == "video" or mtype.startswith("video") or "gif" in mtype:
+            return True
+
+    for link in getattr(entry, "links", []) or []:
+        ltype = str(link.get("type", "")).lower()
+        if ltype.startswith("video") or "gif" in ltype:
+            return True
+
+    html_blob = ""
+    if hasattr(entry, "summary"):
+        html_blob += entry.summary or ""
+    for c in getattr(entry, "content", []) or []:
+        html_blob += c.get("value", "") or ""
+    if html_blob:
+        lowered = html_blob.lower()
+        if "<video" in lowered or ".mp4" in lowered or "video_thumb" in lowered:
+            return True
+
+    return False
+
+
 def extract_images_from_entry(entry) -> List[str]:
     """RSS এন্ট্রি থেকে সর্বোচ্চ ২টি ছবির URL বের করার চেষ্টা করে
     (media:content, media:thumbnail, enclosure, অথবা HTML এর ভেতরের <img>)।
     সংগ্রহ করা সব URL শেষে normalized-dedupe করা হয়, যাতে একই ছবি
-    ভিন্ন query-param সহ দুইবার এলেও সেটা ডুপ্লিকেট হিসেবে বাদ যায়।"""
+    ভিন্ন query-param সহ দুইবার এলেও সেটা ডুপ্লিকেট হিসেবে বাদ যায়।
+    এই এন্ট্রিতে ভিডিও/GIF থাকলে (entry_has_video) কোনো ছবিই রিটার্ন করা
+    হয় না — সেক্ষেত্রে fetch_rss_news/fetch_twitter_news পরে
+    Pollinations.ai দিয়ে AI ছবি জেনারেট করবে।"""
+    if entry_has_video(entry):
+        return []
+
     images: List[str] = []
 
     for m in getattr(entry, "media_content", []) or []:
@@ -538,7 +644,11 @@ def fetch_rss_news() -> List[NewsItem]:
 
 def fetch_twitter_news() -> List[NewsItem]:
     """পাবলিক Nitter RSS ইনস্ট্যান্স থেকে টুইট সংগ্রহ করে (সম্পূর্ণ ফ্রি,
-    কোনো Twitter API key লাগে না)।
+    কোনো Twitter API key লাগে না)। কোনো পোস্টে ভিডিও/GIF থাকলে
+    extract_images_from_entry() স্বয়ংক্রিয়ভাবে সেটার ছবি ফাঁকা রাখে, ফলে
+    পোস্ট-পাইপলাইনে (post_news_item) সেটা ছবি-বিহীন আইটেম হিসেবে গণ্য হয়ে
+    Pollinations.ai দিয়ে AI ছবি বানিয়ে পাঠানো হয় — ভিডিও কখনো
+    ডাউনলোড/পাঠানো হয় না।
 
     নোট: পাবলিক Nitter ইনস্ট্যান্সগুলো মাঝে মাঝে ডাউন থাকে। কাজ না করলে
     NITTER_BASE পরিবর্তন করুন অথবা ENABLE_TWITTER=false সেট করে শুধু RSS দিয়ে চালান।
@@ -559,6 +669,8 @@ def fetch_twitter_news() -> List[NewsItem]:
                     continue
                 title = clean_html(entry.get("title", ""))
                 summary = clean_html(entry.get("description", ""))
+                if entry_has_video(entry):
+                    log.info(f"@{username} এর একটি পোস্টে ভিডিও/GIF পাওয়া গেছে — ভিডিও স্কিপ করে AI ছবি ব্যবহার হবে")
                 items.append(
                     NewsItem(
                         source_name=f"@{username}",
@@ -944,6 +1056,132 @@ def post_news_item(item: NewsItem, emoji: str, headline_bn: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# BTC/ETH রিয়েল-টাইম প্রাইস মাইলস্টোন অ্যালার্ট (নতুন ফিচার)
+# ---------------------------------------------------------------------------
+# Pollinations.ai এর জন্য ইমেজ প্রম্পট — প্রতিটি মাইলস্টোন অ্যালার্টে এই
+# একই প্রম্পট ব্যবহার হয় (৩D আর্ট, কোনো টেক্সট/অক্ষর/ওয়াটারমার্ক ছাড়া)।
+ETH_PRICE_IMAGE_PROMPT = (
+    "glowing futuristic neon crystal Ethereum gem floating in dark space, "
+    "energetic light beams, clean background, 3D render, 4k, no text, "
+    "no letters, no words"
+)
+BTC_PRICE_IMAGE_PROMPT = (
+    "luxurious glowing golden Bitcoin coin rising in dark digital space, "
+    "energetic light beams, cinematic lighting, 3D render, 4k, no text, "
+    "no letters, no words"
+)
+
+PRICE_SYMBOLS = {
+    # symbol (Binance) -> (লেবেল, milestone step, image prompt, ক্যাপশনের handle)
+    "ETHUSDT": ("Ethereum", Config.ETH_MILESTONE_STEP, ETH_PRICE_IMAGE_PROMPT, "@ETH_PRICE"),
+    "BTCUSDT": ("Bitcoin", Config.BTC_MILESTONE_STEP, BTC_PRICE_IMAGE_PROMPT, "@BTC_PRICE"),
+}
+
+COINGECKO_IDS = {"BTCUSDT": "bitcoin", "ETHUSDT": "ethereum"}
+
+
+def fetch_spot_price(symbol: str) -> Optional[float]:
+    """সম্পূর্ণ ফ্রি পাবলিক API দিয়ে লাইভ স্পট প্রাইস আনে — প্রথমে Binance,
+    সেটা ব্যর্থ হলে (রিজিওন-ব্লক/ডাউনটাইম) স্বয়ংক্রিয়ভাবে CoinGecko তে
+    ফলব্যাক করে। কোনো API key প্রয়োজন হয় না।"""
+    try:
+        resp = requests.get(
+            Config.BINANCE_TICKER_URL, params={"symbol": symbol}, timeout=10
+        )
+        resp.raise_for_status()
+        return float(resp.json()["price"])
+    except Exception as e:
+        log.warning(f"Binance থেকে {symbol} এর দাম আনতে ব্যর্থ, CoinGecko চেষ্টা করা হচ্ছে: {e}")
+
+    try:
+        coin_id = COINGECKO_IDS.get(symbol)
+        if not coin_id:
+            return None
+        resp = requests.get(
+            Config.COINGECKO_PRICE_URL,
+            params={"ids": coin_id, "vs_currencies": "usd"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return float(resp.json()[coin_id]["usd"])
+    except Exception as e:
+        log.error(f"CoinGecko থেকেও {symbol} এর দাম আনতে ব্যর্থ: {e}")
+        return None
+
+
+def check_price_milestone(conn: sqlite3.Connection, symbol: str):
+    """একটি সিম্বলের (BTCUSDT/ETHUSDT) বর্তমান দাম চেক করে সংশ্লিষ্ট
+    মাইলস্টোন স্টেপে রাউন্ড করে। আগের সেভ করা মাইলস্টোনের সাথে তুলনা করে —
+    সেটা বদলে গেলে (এবং এটাই প্রথমবার না হলে) দিক (📈/📉) নির্ণয় করে একটি
+    Pollinations.ai আর্ট-সহ একলাইনের অ্যালার্ট পোস্ট করে। একই মাইলস্টোনের
+    আশেপাশে দাম ঘোরাঘুরি করলে (মাইলস্টোন অপরিবর্তিত থাকলে) কিছুই পাঠানো
+    হয় না — এভাবে ডুপ্লিকেট অ্যালার্ট আটকানো হয়।"""
+    label, step, image_prompt, handle = PRICE_SYMBOLS[symbol]
+
+    price = fetch_spot_price(symbol)
+    if price is None:
+        log.warning(f"{label} এর দাম পাওয়া যায়নি, এই চেকটি স্কিপ করা হচ্ছে।")
+        return
+
+    milestone = math.floor(price / step) * step
+    last_milestone = get_last_milestone(conn, symbol)
+
+    if last_milestone is None:
+        # প্রথমবার ট্র্যাক করা হচ্ছে — শুধু বেসলাইন সেভ করা হয়, কোনো
+        # অ্যালার্ট পাঠানো হয় না (নাহলে বট স্টার্ট হওয়ামাত্র একটা ভুয়া
+        # অ্যালার্ট চলে যাবে)।
+        save_milestone(conn, symbol, milestone, price)
+        log.info(f"{label} প্রাইস ট্র্যাকিং শুরু — বেসলাইন মাইলস্টোন ${milestone:,.0f} সেভ করা হলো।")
+        return
+
+    if milestone == last_milestone:
+        return  # একই মাইলস্টোনের ভেতরে ঘোরাঘুরি করছে — অ্যালার্ট নেই
+
+    direction_emoji = "📈" if milestone > last_milestone else "📉"
+    log.info(f"{label} মাইলস্টোন ক্রস হয়েছে: ${last_milestone:,.0f} -> ${milestone:,.0f} ({direction_emoji})")
+    save_milestone(conn, symbol, milestone, price)
+
+    formatted_price = f"{milestone:,.0f}"
+    caption = (
+        f'{direction_emoji} <b>${formatted_price}</b> '
+        f'<a href="{Config.FOLLOW_CHANNEL_URL}"><b>{handle}</b></a>'
+    )
+
+    image_bytes = generate_ai_image_bytes(image_prompt)
+    if image_bytes:
+        sent = send_single_photo(caption, image_bytes=image_bytes)
+    else:
+        # Pollinations.ai ছবি বানাতে ব্যর্থ হলেও, দামের অ্যালার্মটা যেন
+        # মিস না হয়ে যায় তাই টেক্সট আকারেই পাঠানো হয়।
+        log.warning(f"{label} এর জন্য Pollinations.ai ছবি তৈরিতে ব্যর্থ, শুধু টেক্সট পাঠানো হচ্ছে।")
+        sent = send_text_message(caption)
+
+    if sent:
+        log.info(f"{label} মাইলস্টোন অ্যালার্ট পোস্ট হয়েছে: {direction_emoji} ${formatted_price}")
+
+
+def price_alert_loop():
+    """ব্যাকগ্রাউন্ড থ্রেডে অনন্তকাল ধরে চলতে থাকে — প্রতি ৩০-৪৫ সেকেন্ডে
+    (এলোমেলো) BTC ও ETH এর দাম চেক করে। এটি নিউজ পাইপলাইনের main() লুপ
+    থেকে সম্পূর্ণ স্বতন্ত্র/non-blocking, তাই দুটো একসাথে স্বাভাবিকভাবে
+    চলতে থাকে। এই থ্রেডের জন্য নিজস্ব SQLite কানেকশন ব্যবহার করা হয়
+    (sqlite3 কানেকশন থ্রেড-সেফ নয়, তাই মূল লুপের কানেকশনের সাথে শেয়ার
+    করা হয় না)।"""
+    conn = get_db()
+    log.info("BTC/ETH প্রাইস মাইলস্টোন অ্যালার্ট ব্যাকগ্রাউন্ড থ্রেড চালু হয়েছে।")
+    while True:
+        for symbol in PRICE_SYMBOLS:
+            try:
+                check_price_milestone(conn, symbol)
+            except Exception as e:
+                log.error(f"{symbol} প্রাইস চেক করতে সমস্যা হয়েছে: {e}")
+        sleep_time = random.uniform(
+            Config.PRICE_CHECK_MIN_SECONDS, Config.PRICE_CHECK_MAX_SECONDS
+        )
+        time.sleep(sleep_time)
+
+
+# ---------------------------------------------------------------------------
 # প্রসেসিং পাইপলাইন
 # ---------------------------------------------------------------------------
 def process_item(conn: sqlite3.Connection, item: NewsItem):
@@ -1007,6 +1245,14 @@ def main():
     # শুধুমাত্র আসল RSS ফিড ও Twitter সোর্স থেকে লাইভ নিউজ মনিটর করবে।
     # (run_seed_test() ও Config.ENABLE_SEED_TEST ফাংশন/সেটিং কোডে থেকে গেলেও
     # এখান থেকে আর কল করা হয় না, তাই কখনো চলবে না।)
+
+    # BTC/ETH প্রাইস মাইলস্টোন অ্যালার্ট একটি আলাদা non-blocking ব্যাকগ্রাউন্ড
+    # থ্রেডে চালু করা হয় (daemon=True রাখা হয়েছে যাতে মূল প্রোগ্রাম বন্ধ হলে
+    # থ্রেডও নিজে থেকে বন্ধ হয়ে যায়) — এটি নিউজ সাইকেলের সাথে সমান্তরালে চলে।
+    if Config.ENABLE_PRICE_ALERTS:
+        threading.Thread(target=price_alert_loop, daemon=True).start()
+    else:
+        log.info("ENABLE_PRICE_ALERTS=false — প্রাইস মাইলস্টোন অ্যালার্ট বন্ধ রাখা হয়েছে।")
 
     while True:
         cycle_start = time.time()
