@@ -6,12 +6,16 @@ CRYPTO BARTA — সম্পূর্ণ ফ্রি ও স্বয়ংক
 পেইড বিলিং লাগবে না।
 
 কাজের ধাপ (Pipeline):
-  ১. RSS ফিড (CoinDesk, Decrypt) ও X/Twitter (Nitter RSS — Cointelegraph,
-     tier10k, whale_alert) থেকে ব্রেকিং ক্রিপ্টো নিউজ সংগ্রহ করা হয়।
-     Cointelegraph কে ওয়েবসাইট RSS থেকে সরিয়ে তাদের অফিসিয়াল X অ্যাকাউন্টে
-     আনা হয়েছে, যাতে আরও দ্রুত ব্রেকিং আপডেট পাওয়া যায়। কোনো X পোস্টে
-     ভিডিও/GIF থাকলে সেটা কখনোই ডাউনলোড/পাঠানো হয় না — বরং ছবি-বিহীন ধরে
-     Pollinations.ai দিয়ে AI ছবি জেনারেট করে পাঠানো হয়।
+  ১. প্রাইমারি সোর্স হিসেবে RSS ফিড (Cointelegraph, CoinDesk, Decrypt) থেকে
+     ব্রেকিং ক্রিপ্টো নিউজ সংগ্রহ করা হয় — এগুলো সবচেয়ে স্থিতিশীল ও দ্রুত
+     উৎস। সেকেন্ডারি/বেস্ট-এফোর্ট সোর্স হিসেবে X/Twitter (Nitter RSS —
+     tier10k, whale_alert) থেকেও খবর সংগ্রহ করা হয়; পাবলিক Nitter
+     ইনস্ট্যান্স অস্থির হওয়ায় এটি টাইমআউটসহ ফেচ করা হয় এবং কোনো
+     অ্যাকাউন্টের ফিড সাময়িকভাবে না পাওয়া গেলে সেটা গ্রেসফুলি স্কিপ করে
+     পুরো সাইকেল চালিয়ে যাওয়া হয়, কখনো আটকে থাকে না। কোনো পোস্টে
+     ভিডিও/GIF থাকলে (বা কোনো স্ট্যাটিক ছবি না থাকলে) সেটা কখনোই
+     ডাউনলোড/পাঠানো হয় না — বরং ছবি-বিহীন ধরে Pollinations.ai দিয়ে AI ছবি
+     জেনারেট করে পাঠানো হয়।
   ২. Gemini "gemini-3.5-flash-lite" মডেল (ফ্রি, দিনে ১৫০০ রিকোয়েস্ট কোটা;
      কোটা/রেট-লিমিটে ব্যর্থ হলে "gemini-3.1-flash-lite" এ স্বয়ংক্রিয়
      ফলব্যাক) দিয়ে খবরটি পড়ে মূল ঘটনার ১০০-১৫০ অক্ষরের একটি বাংলা "কোর
@@ -110,21 +114,29 @@ class Config:
     POLLINATIONS_WIDTH = "1024"
     POLLINATIONS_HEIGHT = "1024"
 
-    # ---- নিউজ সোর্স (RSS ফিড — সব ফ্রি ও পাবলিক) ----
-    # Cointelegraph এর ওয়েবসাইট RSS বাদ দেওয়া হয়েছে — ব্রেকিং আপডেটের জন্য
-    # এখন তাদের অফিসিয়াল X অ্যাকাউন্ট (নিচে TWITTER_USERNAMES এ) থেকে
-    # সরাসরি ফলো করা হয়, যা ওয়েবসাইট RSS এর চেয়ে অনেক দ্রুত।
+    # ---- নিউজ সোর্স (RSS ফিড — সব ফ্রি, পাবলিক ও অত্যন্ত নির্ভরযোগ্য) ----
+    # পাবলিক Nitter ইনস্ট্যান্স মাঝে মাঝে ডাউন/অস্থির থাকে বলে Cointelegraph কে
+    # আবার সরাসরি তাদের অফিসিয়াল RSS ফিডে ফিরিয়ে আনা হয়েছে — RSS হলো এই
+    # তিনটি সোর্সের (Cointelegraph, CoinDesk, Decrypt) সবচেয়ে স্থিতিশীল ও
+    # রিয়েল-টাইম উৎস, তাই এগুলোই প্রাইমারি নিউজ সোর্স।
     RSS_FEEDS = [
+        "https://cointelegraph.com/rss",
         "https://www.coindesk.com/arc/outboundfeeds/rss/",
         "https://decrypt.co/feed",
     ]
 
     # ---- X/Twitter সোর্স (Nitter RSS — ফ্রি, কোনো পেইড Twitter API লাগে না) ----
+    # এটি এখন সেকেন্ডারি/বেস্ট-এফোর্ট সোর্স হিসেবে কাজ করে — Nitter ইনস্ট্যান্স
+    # অস্থির হওয়ায়, কোনো একাউন্টের ফিড সাময়িকভাবে না পাওয়া গেলে (টাইমআউট বা
+    # এরর) সেটা নিঃশব্দে স্কিপ হয়ে যায় এবং পুরো সাইকেল থেমে থাকে না, লগে শুধু
+    # সতর্কবার্তা যায়। Cointelegraph এখন RSS দিয়ে কভার হচ্ছে, তাই Twitter
+    # লিস্টে শুধু সেই অ্যাকাউন্টগুলো রাখা হয়েছে যাদের নিজস্ব RSS ফিড নেই।
     ENABLE_TWITTER = True
     NITTER_BASE = "https://nitter.net"
-    # Cointelegraph এর অফিসিয়াল X অ্যাকাউন্ট যোগ করা হয়েছে — এখন থেকে
-    # তাদের ব্রেকিং আপডেট সরাসরি X ফিড থেকেই আসবে (ওয়েবসাইট RSS এর বদলে)।
-    TWITTER_USERNAMES = ["Cointelegraph", "tier10k", "whale_alert"]
+    TWITTER_USERNAMES = ["tier10k", "whale_alert"]
+    # Nitter/RSS ফিড আনতে requests এর টাইমআউট (সেকেন্ড) — কোনো ইনস্ট্যান্স
+    # সাড়া না দিলে যেন পুরো সাইকেল আটকে না থেকে দ্রুত পরের সোর্সে চলে যায়।
+    FEED_FETCH_TIMEOUT_SECONDS = 12
 
     # ---- স্টোরেজ / ডুপ্লিকেট চেক (হার্ডকোড) ----
     DB_PATH = "/data/news.db"
@@ -613,12 +625,32 @@ def extract_images_from_entry(entry) -> List[str]:
     return dedupe_image_urls(images)[:2]
 
 
+def parse_feed_safely(feed_url: str, timeout: int = None):
+    """RSS/Nitter ফিড টাইমআউটসহ ফেচ করে feedparser দিয়ে পার্স করে।
+    সরাসরি feedparser.parse(url) ব্যবহার করলে কোনো সার্ভার সাড়া না দিলে
+    (বিশেষত অস্থির পাবলিক Nitter ইনস্ট্যান্স) রিকোয়েস্টটি অনির্দিষ্টকাল আটকে
+    থাকতে পারে — requests.get(timeout=...) ব্যবহার করে সেটা এড়ানো হয়েছে,
+    যাতে কোনো একটা সোর্স সাড়া না দিলেও পুরো সাইকেল আটকে না থেকে দ্রুত
+    পরের সোর্সে চলে যায়। ব্যর্থ হলে exception raise করে — কলার সেটা catch
+    করে লগ করে পরের সোর্সে এগিয়ে যায়।"""
+    resp = requests.get(
+        feed_url,
+        timeout=timeout or Config.FEED_FETCH_TIMEOUT_SECONDS,
+        headers={"User-Agent": "Mozilla/5.0 (compatible; CryptoBartaBot/1.0)"},
+    )
+    resp.raise_for_status()
+    return feedparser.parse(resp.content)
+
+
 def fetch_rss_news() -> List[NewsItem]:
-    """সব RSS ফিড থেকে সর্বশেষ খবরগুলো সংগ্রহ করে।"""
+    """প্রাইমারি ও সবচেয়ে নির্ভরযোগ্য সোর্স — Cointelegraph, CoinDesk ও
+    Decrypt এর অফিসিয়াল RSS ফিড থেকে সর্বশেষ খবরগুলো সংগ্রহ করে। কোনো একটা
+    ফিড সাময়িকভাবে অকেজো থাকলে (টাইমআউট/এরর) সেটা লগ করে বাকি ফিডগুলো
+    থেকে সংগ্রহ চালিয়ে যায় — একটার ব্যর্থতায় পুরো সাইকেল থামে না।"""
     items: List[NewsItem] = []
     for feed_url in Config.RSS_FEEDS:
         try:
-            parsed = feedparser.parse(feed_url)
+            parsed = parse_feed_safely(feed_url)
             source_name = parsed.feed.get("title", feed_url) if parsed.feed else feed_url
             for entry in parsed.entries[:10]:
                 link = entry.get("link")
@@ -643,12 +675,17 @@ def fetch_rss_news() -> List[NewsItem]:
 
 
 def fetch_twitter_news() -> List[NewsItem]:
-    """পাবলিক Nitter RSS ইনস্ট্যান্স থেকে টুইট সংগ্রহ করে (সম্পূর্ণ ফ্রি,
-    কোনো Twitter API key লাগে না)। কোনো পোস্টে ভিডিও/GIF থাকলে
-    extract_images_from_entry() স্বয়ংক্রিয়ভাবে সেটার ছবি ফাঁকা রাখে, ফলে
-    পোস্ট-পাইপলাইনে (post_news_item) সেটা ছবি-বিহীন আইটেম হিসেবে গণ্য হয়ে
-    Pollinations.ai দিয়ে AI ছবি বানিয়ে পাঠানো হয় — ভিডিও কখনো
-    ডাউনলোড/পাঠানো হয় না।
+    """সেকেন্ডারি/বেস্ট-এফোর্ট সোর্স — পাবলিক Nitter RSS ইনস্ট্যান্স থেকে
+    টুইট সংগ্রহ করে (সম্পূর্ণ ফ্রি, কোনো Twitter API key লাগে না)। প্রতিটি
+    অ্যাকাউন্টের ফিড আলাদাভাবে টাইমআউটসহ ফেচ করা হয় (parse_feed_safely) —
+    কোনো একাউন্টের ফিড সাময়িকভাবে না পাওয়া গেলে (Nitter ইনস্ট্যান্স ডাউন,
+    টাইমআউট ইত্যাদি) সেটা নিঃশব্দে/গ্রেসফুলি স্কিপ হয়ে পরের অ্যাকাউন্টে
+    চলে যায় — পুরো সাইকেল কখনো আটকে থাকে না বা ব্যর্থ হয় না।
+
+    কোনো পোস্টে ভিডিও/GIF থাকলে extract_images_from_entry()
+    স্বয়ংক্রিয়ভাবে সেটার ছবি ফাঁকা রাখে, ফলে post_news_item() সেটাকে
+    ছবি-বিহীন আইটেম হিসেবে ধরে Pollinations.ai দিয়ে AI ছবি বানিয়ে পাঠায় —
+    ভিডিও কখনো ডাউনলোড/পাঠানো হয় না।
 
     নোট: পাবলিক Nitter ইনস্ট্যান্সগুলো মাঝে মাঝে ডাউন থাকে। কাজ না করলে
     NITTER_BASE পরিবর্তন করুন অথবা ENABLE_TWITTER=false সেট করে শুধু RSS দিয়ে চালান।
@@ -659,9 +696,9 @@ def fetch_twitter_news() -> List[NewsItem]:
     for username in Config.TWITTER_USERNAMES:
         feed_url = f"{Config.NITTER_BASE.rstrip('/')}/{username}/rss"
         try:
-            parsed = feedparser.parse(feed_url)
+            parsed = parse_feed_safely(feed_url)
             if not parsed.entries:
-                log.warning(f"@{username} এর জন্য Nitter থেকে কিছু পাওয়া যায়নি (ইনস্ট্যান্স ডাউন থাকতে পারে)")
+                log.warning(f"@{username} এর জন্য Nitter থেকে কিছু পাওয়া যায়নি (ইনস্ট্যান্স ডাউন থাকতে পারে) — স্কিপ করা হচ্ছে")
                 continue
             for entry in parsed.entries[:5]:
                 link = entry.get("link")
@@ -683,7 +720,7 @@ def fetch_twitter_news() -> List[NewsItem]:
                     )
                 )
         except Exception as e:
-            log.warning(f"@{username} এর Nitter ফিড ফেচ করতে ব্যর্থ: {e}")
+            log.warning(f"@{username} এর Nitter ফিড ফেচ করতে ব্যর্থ (গ্রেসফুলি স্কিপ করা হচ্ছে, সাইকেল থামছে না): {e}")
     return items
 
 
