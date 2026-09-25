@@ -72,7 +72,7 @@ class Config:
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
     # ---- AI মডেল ----
-    GEMINI_TEXT_MODEL = os.getenv("GEMINI_TEXT_MODEL", "gemini-2.5-flash")
+    GEMINI_TEXT_MODEL = os.getenv("GEMINI_TEXT_MODEL", "gemini-3.8-flash")
 
     # ---- ছবি জেনারেশন (সম্পূর্ণ ফ্রি — Pollinations.ai, কোনো key লাগে না) ----
     ENABLE_AI_IMAGE = os.getenv("ENABLE_AI_IMAGE", "true").lower() == "true"
