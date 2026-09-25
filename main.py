@@ -9,8 +9,11 @@ CRYPTO BARTA — সম্পূর্ণ ফ্রি ও স্বয়ংক
   ০. প্রথমবার চালু হলে ৫টি স্যাম্পল/টেস্ট নিউজ পাঠিয়ে পুরো পাইপলাইন যাচাই
      করে নেয় (মিডিয়া হ্যান্ডলিং ও Pollinations.ai ছবি জেনারেশন সহ)।
   ১. RSS ফিড ও X/Twitter (Nitter RSS) থেকে ব্রেকিং ক্রিপ্টো নিউজ সংগ্রহ করা হয়।
-  ২. Gemini "gemini-2.5-flash" মডেল (ফ্রি) দিয়ে খবরটি পড়ে ১০০-১৫০ অক্ষরের
-     একটি বাংলা ব্রেকিং নিউজ হেডলাইন এবং প্রাসঙ্গিক ইমোজি তৈরি করা হয়।
+  ২. Gemini "gemini-3.5-flash-lite" মডেল (ফ্রি, দিনে ১৫০০ রিকোয়েস্ট কোটা;
+     কোটা/রেট-লিমিটে ব্যর্থ হলে "gemini-3.1-flash-lite" এ স্বয়ংক্রিয়
+     ফলব্যাক) দিয়ে খবরটি পড়ে মূল ঘটনার ১০০-১৫০ অক্ষরের একটি বাংলা "কোর
+     ইনসিডেন্ট সামারি" হেডলাইন এবং প্রাসঙ্গিক ইমোজি তৈরি করা হয় (জেনেরিক
+     টিজার বাক্য নয়)।
   ৩. SQLite ডাটাবেসে লিংক সেভ রেখে ডুপ্লিকেট আটকানো হয় + TF-IDF cosine
      similarity দিয়ে একই ধরনের (৭৫%+ মিল) খবর বাদ দেওয়া হয়।
   ৪. খবরে ছবি থাকলে সেটি পাঠানো হয়; না থাকলে Pollinations.ai (সম্পূর্ণ ফ্রি,
@@ -26,6 +29,7 @@ import re
 import io
 import json
 import time
+import random
 import sqlite3
 import logging
 import hashlib
@@ -72,7 +76,19 @@ class Config:
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
     # ---- AI মডেল ----
-    GEMINI_TEXT_MODEL = os.getenv("GEMINI_TEXT_MODEL", "gemini-3.8-flash")
+    # বাগ #1 ফিক্স: আগে "gemini-3.8-flash" ব্যবহার হতো যার ফ্রি-টিয়ার কোটা
+    # মাত্র ২০ রিকোয়েস্ট/দিন — ফলে বারবার 429 RESOURCE_EXHAUSTED এরর আসছিল।
+    # এখন ডিফল্ট মডেল "gemini-3.5-flash-lite" — এর ফ্রি কোটা দিনে ১৫০০
+    # রিকোয়েস্ট। প্রাইমারি মডেল কোটা/রেট-লিমিটে ব্যর্থ হলে কোডেই স্বয়ংক্রিয়ভাবে
+    # ফলব্যাক মডেল "gemini-3.1-flash-lite" দিয়ে আবার চেষ্টা করা হয়।
+    GEMINI_TEXT_MODEL = os.getenv("GEMINI_TEXT_MODEL", "gemini-3.5-flash-lite")
+    GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.1-flash-lite")
+
+    # ---- Gemini API কলের মধ্যে রেট-লিমিট বিরতি (বাগ #1 ফিক্স) ----
+    # প্রতিটি Gemini কলের পর ৩-৫ সেকেন্ড এলোমেলো বিরতি দেওয়া হয়, যাতে
+    # হঠাৎ অনেকগুলো রিকোয়েস্ট একসাথে গিয়ে বার্স্ট-লিমিটে না পড়ে।
+    AI_CALL_MIN_DELAY = float(os.getenv("AI_CALL_MIN_DELAY", "3"))
+    AI_CALL_MAX_DELAY = float(os.getenv("AI_CALL_MAX_DELAY", "5"))
 
     # ---- ছবি জেনারেশন (সম্পূর্ণ ফ্রি — Pollinations.ai, কোনো key লাগে না) ----
     ENABLE_AI_IMAGE = os.getenv("ENABLE_AI_IMAGE", "true").lower() == "true"
@@ -362,19 +378,51 @@ def get_seed_news_items() -> List[NewsItem]:
     ]
 
 
+SEED_TEST_DELAY_SECONDS = 5  # বাগ #2 ফিক্স: প্রতিটি টেস্ট আইটেমের মাঝে বিরতি
+
+
 def run_seed_test(conn: sqlite3.Connection):
-    """৫টি টেস্ট নিউজ একে একে পুরো পাইপলাইনে (হেডলাইন -> ছবি -> পোস্ট) চালায়,
-    যাতে ডেপ্লয় করার সাথে সাথেই বটের সব ফিচার নিজের চোখে যাচাই করা যায়।"""
+    """৫টি টেস্ট নিউজ একে একে (sequentially) পুরো পাইপলাইনে
+    (হেডলাইন -> ছবি -> পোস্ট) চালায়, যাতে ডেপ্লয় করার সাথে সাথেই বটের সব
+    ফিচার নিজের চোখে যাচাই করা যায়।
+
+    বাগ #2 ফিক্স:
+      - সবগুলো (৫টি) আইটেম নিশ্চিতভাবে প্রসেস করা হয় — কোনো একটি আইটেমে
+        সাময়িক (transient) এরর হলে সেটার জন্য একবার রিট্রাই করা হয়,
+        তাতেও ব্যর্থ হলে লগ করে পরের আইটেমে চলে যাওয়া হয় — পুরো টেস্ট
+        রান কখনোই মাঝপথে থেমে যায় না।
+      - প্রতিটি আইটেমের পরে নিশ্চিতভাবে ৫ সেকেন্ড বিরতি দেওয়া হয় (হেডলাইন
+        তৈরি ব্যর্থ হলেও), যাতে পরপর কলে রেট-লিমিটে না পড়ে।
+    """
+    seed_items = get_seed_news_items()
+    total = len(seed_items)
     log.info("=" * 60)
-    log.info("প্রথম রান শনাক্ত হয়েছে — ৫টি টেস্ট নিউজ পাঠানো শুরু হচ্ছে...")
+    log.info(f"প্রথম রান শনাক্ত হয়েছে — {total}টি টেস্ট নিউজ পাঠানো শুরু হচ্ছে...")
     log.info("=" * 60)
-    for idx, item in enumerate(get_seed_news_items(), start=1):
-        log.info(f"[টেস্ট {idx}/5] প্রসেস করা হচ্ছে: {item.title}")
-        try:
-            process_item(conn, item)
-        except Exception as e:
-            log.error(f"[টেস্ট {idx}/5] ব্যর্থ হয়েছে: {e}")
-    log.info("টেস্ট নিউজ পাঠানো সম্পন্ন হয়েছে। এখন থেকে বট স্বাভাবিক RSS/Twitter মোডে চলবে।")
+
+    success_count = 0
+    for idx, item in enumerate(seed_items, start=1):
+        log.info(f"[টেস্ট {idx}/{total}] প্রসেস করা হচ্ছে: {item.title}")
+        processed_ok = False
+        for retry in range(2):  # প্রথম চেষ্টা + ১টি রিট্রাই
+            try:
+                process_item(conn, item)
+                processed_ok = True
+                break
+            except Exception as e:
+                if retry == 0:
+                    log.warning(f"[টেস্ট {idx}/{total}] সাময়িক এরর হয়েছে, একবার রিট্রাই করা হচ্ছে: {e}")
+                    time.sleep(3)
+                else:
+                    log.error(f"[টেস্ট {idx}/{total}] রিট্রাই করেও ব্যর্থ হয়েছে, পরের আইটেমে যাওয়া হচ্ছে: {e}")
+        if processed_ok:
+            success_count += 1
+
+        if idx < total:
+            log.info(f"[টেস্ট {idx}/{total}] সম্পন্ন — পরের টেস্ট আইটেমের আগে {SEED_TEST_DELAY_SECONDS} সেকেন্ড অপেক্ষা করা হচ্ছে।")
+            time.sleep(SEED_TEST_DELAY_SECONDS)
+
+    log.info(f"টেস্ট নিউজ পাঠানো সম্পন্ন হয়েছে ({success_count}/{total} সফলভাবে প্রসেস হয়েছে)। এখন থেকে বট স্বাভাবিক RSS/Twitter মোডে চলবে।")
 
 
 # ---------------------------------------------------------------------------
@@ -508,6 +556,42 @@ def get_genai_client():
     return _genai_client
 
 
+def ai_rate_limit_sleep():
+    """বাগ #1 ফিক্স: প্রতিটি Gemini API কলের পর ৩-৫ সেকেন্ড এলোমেলো বিরতি
+    দেয়, যাতে বার্স্ট-লিমিটে ধাক্কা না লাগে।"""
+    delay = random.uniform(Config.AI_CALL_MIN_DELAY, Config.AI_CALL_MAX_DELAY)
+    time.sleep(delay)
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    """এরর মেসেজে 429 / RESOURCE_EXHAUSTED / quota থাকলে সেটাকে
+    রেট-লিমিট/কোটা এরর হিসেবে শনাক্ত করে।"""
+    text = str(exc).lower()
+    return "429" in text or "resource_exhausted" in text or "quota" in text
+
+
+def _call_gemini(prompt: str):
+    """Gemini কে কল করে — প্রথমে প্রাইমারি মডেল দিয়ে, রেট-লিমিট/কোটা এরর
+    পেলে ফলব্যাক মডেল দিয়ে আবার চেষ্টা করে। প্রতিটি কলের পরেই
+    ai_rate_limit_sleep() দিয়ে বিরতি দেওয়া হয় (সফল হোক বা ব্যর্থ)।"""
+    client = get_genai_client()
+    models_to_try = [Config.GEMINI_TEXT_MODEL, Config.GEMINI_FALLBACK_MODEL]
+    last_exc = None
+    for model_name in models_to_try:
+        try:
+            resp = client.models.generate_content(model=model_name, contents=prompt)
+            return resp
+        except Exception as e:
+            last_exc = e
+            if _is_rate_limit_error(e):
+                log.warning(f"মডেল '{model_name}' কোটা/রেট-লিমিটে ব্যর্থ, ফলব্যাক মডেল চেষ্টা করা হচ্ছে: {e}")
+                continue
+            raise
+        finally:
+            ai_rate_limit_sleep()
+    raise last_exc
+
+
 # হেডলাইন + ইমোজি তৈরির জন্য প্রম্পট টেমপ্লেট। মডেলকে JSON ফরম্যাটে উত্তর
 # দিতে বলা হয়েছে যাতে ইমোজি ও হেডলাইন আলাদাভাবে নির্ভরযোগ্যভাবে বের করা যায়।
 HEADLINE_PROMPT_TEMPLATE = """You are a professional Bengali crypto news editor for a Telegram breaking-news channel.
@@ -525,15 +609,27 @@ Read the news content below and produce a JSON object with two fields:
      emoji right after the category emoji (example: "🚨🇺🇸", "🚀🇸🇻", "📉🇮🇳").
    - If no specific country is mentioned, use only the category emoji (no flag).
 
-2. "headline": ONE single-sentence, high-impact BREAKING NEWS headline written
-   in Bengali (বাংলা).
+2. "headline": a single Bengali (বাংলা) sentence that is a CORE INCIDENT
+   SUMMARY of the news — not a generic teaser.
 
-STRICT RULES FOR "headline":
+STRICT RULES FOR "headline" (বাগ #3 ফিক্স — কোর ইনসিডেন্ট সামারি):
+- It MUST state the specific WHAT HAPPENED: the concrete event, action,
+  number, amount, percentage, entity name, or outcome taken directly from
+  the "Title"/"Details" below. Name who did what, to whom/what, and any
+  figures involved, exactly like a news-agency one-line summary.
+  Example of the CORRECT style: "নর্থ কোরিয়ার হ্যাকারদের হামলায় বিটগেটের
+  ৩৫২ মিলিয়ন ডলার ক্ষতি হয়েছে বলে সন্দেহ করা হচ্ছে।"
+- It is STRICTLY FORBIDDEN to write generic teaser/filler phrases such as
+  "আজকের সেরা খবর", "বিস্তারিত জেনে নিন", "দামের ওঠানামা", "জেনে নিন",
+  "সর্বশেষ খবর", or any sentence that only says news exists without stating
+  the actual fact. If you catch yourself writing a teaser, rewrite it as a
+  factual summary instead.
 - Bengali text ONLY. No quotes, no English words, no hashtags, and NO emoji
   inside this field (the emoji goes only in the separate "emoji" field above).
 - Length MUST be between {min_c} and {max_c} characters (including spaces).
-- Sound urgent and newsworthy, appropriate for a breaking-news alert.
-- Base it strictly on the facts given below - never invent numbers or facts.
+- Base it strictly on the facts given below — never invent numbers or facts
+  that are not present in the content. If the content has no specific number,
+  summarize the specific action/decision/entity instead.
 
 Respond with ONLY a valid JSON object in this exact shape, nothing else,
 no markdown code fences, no explanation:
@@ -567,11 +663,29 @@ def _sanitize_emoji(emoji: str) -> str:
     return emoji
 
 
+# বাগ #3 ফিক্স: এই জেনেরিক টিজার বাক্যাংশগুলো হেডলাইনে থাকলে সেটাকে
+# ব্যর্থ ধরে নিয়ে Gemini কে আবার লিখতে বলা হয় — কারণ এগুলো "কোর ইনসিডেন্ট"
+# বলে না, শুধু "খবর আছে" বলে।
+TEASER_PHRASES_BN = [
+    "সেরা খবর",
+    "বিস্তারিত জেনে নিন",
+    "জেনে নিন",
+    "সর্বশেষ খবর",
+    "দামের ওঠানামা",
+    "আজকের খবর",
+]
+
+
+def _headline_has_teaser_phrase(headline: str) -> bool:
+    return any(phrase in headline for phrase in TEASER_PHRASES_BN)
+
+
 def generate_bengali_headline(item: NewsItem) -> Optional[Tuple[str, str]]:
-    """Gemini দিয়ে ১০০-১৫০ অক্ষরের বাংলা হেডলাইন এবং প্রাসঙ্গিক ইমোজি তৈরি
-    করে। (emoji, headline) টাপল রিটার্ন করে, অথবা ব্যর্থ হলে None।
-    অক্ষরসংখ্যা সীমার মধ্যে না এলে সর্বোচ্চ ৩ বার চেষ্টা করে।"""
-    client = get_genai_client()
+    """Gemini দিয়ে ১০০-১৫০ অক্ষরের বাংলা "কোর ইনসিডেন্ট সামারি" হেডলাইন এবং
+    প্রাসঙ্গিক ইমোজি তৈরি করে। (emoji, headline) টাপল রিটার্ন করে, অথবা
+    ব্যর্থ হলে None। অক্ষরসংখ্যা সীমার মধ্যে না এলে বা জেনেরিক টিজার বাক্য
+    থাকলে সর্বোচ্চ ৩ বার চেষ্টা করে। প্রতিটি Gemini কল রেট-লিমিট এড়াতে
+    প্রাইমারি/ফলব্যাক মডেল ও ৩-৫ সেকেন্ড বিরতি ব্যবহার করে (_call_gemini)।"""
     prompt = HEADLINE_PROMPT_TEMPLATE.format(
         min_c=Config.HEADLINE_MIN_CHARS,
         max_c=Config.HEADLINE_MAX_CHARS,
@@ -580,20 +694,26 @@ def generate_bengali_headline(item: NewsItem) -> Optional[Tuple[str, str]]:
     )
     for attempt in range(3):
         try:
-            resp = client.models.generate_content(
-                model=Config.GEMINI_TEXT_MODEL,
-                contents=prompt,
-            )
+            resp = _call_gemini(prompt)
             data = _parse_headline_json(resp.text or "")
             if not data:
                 log.warning(f"JSON পার্স করা যায়নি, আবার চেষ্টা করা হচ্ছে ({attempt + 1}/3)")
-                time.sleep(1)
                 continue
 
             headline = str(data.get("headline", "")).strip().strip('"').strip()
             headline = re.sub(r"\s+", " ", headline)
             emoji = _sanitize_emoji(str(data.get("emoji", "")))
             length = len(headline)
+
+            if _headline_has_teaser_phrase(headline):
+                log.info(f"টিজার/জেনেরিক বাক্য ধরা পড়েছে, আবার চেষ্টা করা হচ্ছে ({attempt + 1}/3): {headline}")
+                prompt += (
+                    "\n\nYour previous attempt used a generic teaser phrase instead of "
+                    "stating the core incident/fact. Rewrite it as a specific factual "
+                    "summary of what actually happened, with names/numbers from the "
+                    "content. Respond with the same JSON shape."
+                )
+                continue
 
             if Config.HEADLINE_MIN_CHARS <= length <= Config.HEADLINE_MAX_CHARS:
                 return emoji, headline
@@ -606,7 +726,6 @@ def generate_bengali_headline(item: NewsItem) -> Optional[Tuple[str, str]]:
             )
         except Exception as e:
             log.warning(f"Gemini হেডলাইন তৈরিতে ব্যর্থ (চেষ্টা {attempt + 1}): {e}")
-            time.sleep(2)
     return None
 
 
@@ -625,7 +744,6 @@ def generate_image_prompt(item: NewsItem) -> str:
     visual concept প্রম্পট তৈরি করে (Gemini দিয়ে, সম্পূর্ণ ফ্রি)।
     কড়াভাবে টেক্সট/অক্ষর-বিহীন এবং শুধু পরিষ্কার ইংরেজি লোগো/সিম্বল
     ব্যবহারের নির্দেশনা দেওয়া হয়েছে।"""
-    client = get_genai_client()
     prompt = (
         "Create a short English visual-concept prompt (max 30 words) for an AI "
         "image generator, for a crypto news illustration. Cinematic, "
@@ -642,7 +760,7 @@ def generate_image_prompt(item: NewsItem) -> str:
         "Output ONLY the prompt text, nothing else."
     )
     try:
-        resp = client.models.generate_content(model=Config.GEMINI_TEXT_MODEL, contents=prompt)
+        resp = _call_gemini(prompt)
         text = (resp.text or "").strip()
         if text:
             return text
