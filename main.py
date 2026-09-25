@@ -121,7 +121,9 @@ class Config:
     SIMILARITY_WINDOW = int(os.getenv("SIMILARITY_WINDOW", "50"))
 
     # ---- প্রথম রানে টেস্ট নিউজ পাঠানো হবে কিনা ----
-    ENABLE_SEED_TEST = os.getenv("ENABLE_SEED_TEST", "true").lower() == "true"
+    # সিড/টেস্ট নিউজ ফিচার সম্পূর্ণভাবে বন্ধ (main() থেকে আর কল হয় না);
+    # ডিফল্ট মান "false" করে রাখা হয়েছে বাড়তি নিরাপত্তার জন্য।
+    ENABLE_SEED_TEST = os.getenv("ENABLE_SEED_TEST", "false").lower() == "true"
 
     # ---- লুপ কনফিগারেশন ----
     POLL_INTERVAL_SECONDS = int(os.getenv("POLL_INTERVAL_SECONDS", "90"))
@@ -436,25 +438,58 @@ def clean_html(raw_html: str) -> str:
     return soup.get_text(separator=" ", strip=True)
 
 
+def _normalize_image_url(url: str) -> str:
+    """একটি ছবির URL কে তুলনা/ডুপ্লিকেট-চেকের জন্য নরমালাইজ করে —
+    query string ও fragment বাদ দিয়ে, scheme/host লোয়ারকেস করে, এবং
+    শেষের '/' বাদ দিয়ে। এতে একই ছবির ভিন্ন query-param (যেমন ?w=800 বনাম
+    ?w=1200 বা ট্র্যাকিং প্যারামিটার) সহ URL গুলোকে একই ছবি হিসেবে ধরা যায়।"""
+    try:
+        parts = urllib.parse.urlsplit(url.strip())
+        normalized_path = parts.path.rstrip("/")
+        return urllib.parse.urlunsplit(
+            (parts.scheme.lower(), parts.netloc.lower(), normalized_path, "", "")
+        )
+    except Exception:
+        return (url or "").strip()
+
+
+def dedupe_image_urls(urls: List[str]) -> List[str]:
+    """URL লিস্ট থেকে নরমালাইজড-ডুপ্লিকেট বাদ দিয়ে প্রথমবার পাওয়া
+    (আসল/original) URL গুলো ক্রমানুসারে রিটার্ন করে।"""
+    seen = set()
+    unique: List[str] = []
+    for url in urls:
+        if not url:
+            continue
+        key = _normalize_image_url(url)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(url)
+    return unique
+
+
 def extract_images_from_entry(entry) -> List[str]:
     """RSS এন্ট্রি থেকে সর্বোচ্চ ২টি ছবির URL বের করার চেষ্টা করে
-    (media:content, media:thumbnail, enclosure, অথবা HTML এর ভেতরের <img>)।"""
+    (media:content, media:thumbnail, enclosure, অথবা HTML এর ভেতরের <img>)।
+    সংগ্রহ করা সব URL শেষে normalized-dedupe করা হয়, যাতে একই ছবি
+    ভিন্ন query-param সহ দুইবার এলেও সেটা ডুপ্লিকেট হিসেবে বাদ যায়।"""
     images: List[str] = []
 
     for m in getattr(entry, "media_content", []) or []:
         url = m.get("url")
-        if url and url not in images:
+        if url:
             images.append(url)
 
     for m in getattr(entry, "media_thumbnail", []) or []:
         url = m.get("url")
-        if url and url not in images:
+        if url:
             images.append(url)
 
     for link in getattr(entry, "links", []) or []:
         if link.get("rel") == "enclosure" and str(link.get("type", "")).startswith("image"):
             url = link.get("href")
-            if url and url not in images:
+            if url:
                 images.append(url)
 
     html_blob = ""
@@ -466,10 +501,10 @@ def extract_images_from_entry(entry) -> List[str]:
         soup = BeautifulSoup(html_blob, "html.parser")
         for img in soup.find_all("img"):
             src = img.get("src")
-            if src and src not in images:
+            if src:
                 images.append(src)
 
-    return images[:2]
+    return dedupe_image_urls(images)[:2]
 
 
 def fetch_rss_news() -> List[NewsItem]:
@@ -878,17 +913,23 @@ def send_media_group(caption: str, image_urls: List[str]) -> bool:
 
 def post_news_item(item: NewsItem, emoji: str, headline_bn: str) -> bool:
     """ছবি আছে কি নেই তার ওপর ভিত্তি করে সঠিক পদ্ধতিতে পোস্ট করে:
-    ২টি সোর্স ছবি -> অ্যালবাম | ১টি সোর্স ছবি -> একক ছবি |
-    কোনো ছবি নেই -> Pollinations.ai দিয়ে ছবি বানিয়ে পাঠানো | সব ব্যর্থ হলে -> শুধু টেক্সট।"""
+    ২টি ভিন্ন সোর্স ছবি -> অ্যালবাম | ১টি (বা ডুপ্লিকেট) সোর্স ছবি -> একক ছবি |
+    কোনো ছবি নেই -> Pollinations.ai দিয়ে ছবি বানিয়ে পাঠানো | সব ব্যর্থ হলে -> শুধু টেক্সট।
+
+    ডুপ্লিকেট-ইমেজ বাগ ফিক্স: পোস্ট করার ঠিক আগে আবার dedupe_image_urls()
+    দিয়ে normalized-dedupe করা হয়, যাতে একই ছবি দুইবার (query-param ভিন্ন
+    হলেও) অ্যালবাম হিসেবে না যায়। সত্যিকারের ২টি আলাদা ইউনিক ছবি থাকলে
+    তবেই sendMediaGroup ব্যবহার হয়, নাহলে sendPhoto দিয়ে একটাই পাঠানো হয়।"""
     caption = build_caption(emoji, headline_bn, item.link)
-    valid_images = [u for u in item.images if u and u.startswith("http")]
+    raw_images = [u for u in item.images if u and u.startswith("http")]
+    valid_images = dedupe_image_urls(raw_images)
 
     if len(valid_images) >= 2:
-        log.info("২টি সোর্স ছবি দিয়ে অ্যালবাম আকারে পোস্ট করা হচ্ছে")
+        log.info("২টি ভিন্ন (ইউনিক) সোর্স ছবি দিয়ে অ্যালবাম আকারে পোস্ট করা হচ্ছে")
         return send_media_group(caption, valid_images[:2])
 
     if len(valid_images) == 1:
-        log.info("১টি সোর্স ছবি দিয়ে পোস্ট করা হচ্ছে")
+        log.info("১টি ইউনিক সোর্স ছবি দিয়ে পোস্ট করা হচ্ছে (ডুপ্লিকেট থাকলে বাদ দেওয়া হয়েছে)")
         return send_single_photo(caption, image_url=valid_images[0])
 
     if Config.ENABLE_AI_IMAGE:
@@ -955,18 +996,17 @@ def run_cycle(conn: sqlite3.Connection):
 
 
 def main():
-    """মূল ফাংশন — কনফিগারেশন যাচাই করে, প্রথম রান হলে ৫টি টেস্ট নিউজ
-    পাঠায়, তারপর অনন্তকাল ধরে স্বাভাবিক লুপ চালায়।"""
+    """মূল ফাংশন — কনফিগারেশন যাচাই করে সরাসরি আসল RSS/Twitter মনিটরিং লুপ
+    চালু করে। (সিড/টেস্ট নিউজ সম্পূর্ণভাবে বন্ধ করা হয়েছে — নিচের নোট দেখুন।)"""
     validate_config()
     conn = get_db()
     log.info("Crypto Barta বট চালু হয়েছে।")
 
-    # প্রথমবার (অথবা bot_meta রিসেট হলে) ৫টি টেস্ট নিউজ পাঠিয়ে পুরো
-    # পাইপলাইন যাচাই করা হয়। এরপর এই ফ্ল্যাগ ডাটাবেসে সেভ থাকায় বট আর
-    # কখনো পুনরায় টেস্ট নিউজ পাঠাবে না — এমনকি Railway রিস্টার্ট হলেও।
-    if Config.ENABLE_SEED_TEST and not is_seed_done(conn):
-        run_seed_test(conn)
-        mark_seed_done(conn)
+    # ৫টি মক/সিড টেস্ট নিউজ পাঠানোর ফিচারটি সম্পূর্ণভাবে বন্ধ করা হয়েছে —
+    # বট স্টার্টআপেই কোনো কৃত্রিম/টেস্ট নিউজ পাঠাবে না, প্রথম সাইকেল থেকেই
+    # শুধুমাত্র আসল RSS ফিড ও Twitter সোর্স থেকে লাইভ নিউজ মনিটর করবে।
+    # (run_seed_test() ও Config.ENABLE_SEED_TEST ফাংশন/সেটিং কোডে থেকে গেলেও
+    # এখান থেকে আর কল করা হয় না, তাই কখনো চলবে না।)
 
     while True:
         cycle_start = time.time()
