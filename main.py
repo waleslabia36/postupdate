@@ -7,23 +7,21 @@ CRYPTO BARTA — সম্পূর্ণ ফ্রি ও স্বয়ংক
 
 কাজের ধাপ (Pipeline):
   ১. প্রাইমারি সোর্স হিসেবে RSS ফিড (Cointelegraph, CoinDesk, Decrypt) থেকে
-     ব্রেকিং ক্রিপ্টো নিউজ সংগ্রহ করা হয়। সেকেন্ডারি/বেস্ট-এফোর্ট সোর্স
-     হিসেবে X/Twitter (Nitter RSS — tier10k, whale_alert, WatcherGuru,
-     Cointelegraph) থেকেও খবর সংগ্রহ করা হয়। পাবলিক Nitter ইনস্ট্যান্স খুবই
-     অস্থির (X এর আক্রমণাত্মক অ্যান্টি-স্ক্র্যাপিং নীতির কারণে প্রায়ই
-     ডাউন/ব্লকড থাকে), তাই একাধিক ইনস্ট্যান্সের একটি তালিকা (NITTER_INSTANCES)
-     রাখা হয়েছে — প্রতিটি অ্যাকাউন্টের জন্য একে একে চেষ্টা করে প্রথম যেটি
-     কাজ করে সেটি ব্যবহার করা হয়, টাইমআউটসহ। কোনো একাউন্টের সব ইনস্ট্যান্স
-     ব্যর্থ হলে সেটা গ্রেসফুলি স্কিপ করে পুরো সাইকেল চালিয়ে যাওয়া হয়, কখনো
-     আটকে থাকে না।
+     ব্রেকিং ক্রিপ্টো নিউজ সংগ্রহ করা হয়। এর পাশাপাশি দ্বিতীয় সোর্স হিসেবে
+     পাবলিক Telegram চ্যানেল (WatcherGuru, Cointelegraph) থেকেও খবর সংগ্রহ
+     করা হয় — Telegram এর পাবলিক ওয়েব-প্রিভিউ পেইজ (https://t.me/s/<channel>)
+     থেকে কোনো লগইন/API key/authentication ছাড়াই সম্পূর্ণ ফ্রি স্ক্র্যাপ
+     করা হয় (requests + BeautifulSoup দিয়ে)। কোনো চ্যানেল সাময়িকভাবে ফেচ
+     করতে ব্যর্থ হলে সেটা গ্রেসফুলি স্কিপ করে পরের চ্যানেল/সোর্সে চলে যাওয়া
+     হয়, পুরো সাইকেল কখনো আটকে থাকে না।
   ২. Gemini মডেল দিয়ে প্রতিটি খবর প্রথমে "high-impact কিনা" যাচাই করা হয়
      (is_important flag) — রুটিন/জেনেরিক/স্পনসরড/মাইনর অল্টকয়েন খবর
      সম্পূর্ণভাবে বাদ দেওয়া হয়, শুধুমাত্র সত্যিকারের বড় খবর
      (breaking event, বড় হ্যাক, ETF আপডেট, রেগুলেটরি সিদ্ধান্ত, সেন্ট্রাল
      ব্যাংক সিদ্ধান্ত, বড় ইনস্টিটিউশনাল পার্টনারশিপ, চরম ভোলাটিলিটি)
-     প্রসেস ও পোস্ট করা হয়। একই সাথে মার্কেট সেন্টিমেন্ট (BULLISH/BEARISH)
-     এবং ১০০-১৫০ অক্ষরের একটি বাংলা "কোর ইনসিডেন্ট সামারি" হেডলাইন ও
-     প্রাসঙ্গিক ইমোজি তৈরি করা হয়।
+     প্রসেস ও পোস্ট করা হয়। একই সাথে মার্কেট সেন্টিমেন্ট
+     (BULLISH/BEARISH/NEUTRAL) এবং ১০০-১৫০ অক্ষরের একটি বাংলা "কোর
+     ইনসিডেন্ট সামারি" হেডলাইন ও প্রাসঙ্গিক ইমোজি তৈরি করা হয়।
   ৩. SQLite ডাটাবেসে লিংক সেভ রেখে ডুপ্লিকেট আটকানো হয় + TF-IDF cosine
      similarity দিয়ে সব সোর্স জুড়ে একই ধরনের (৭৫%+ মিল) খবর বাদ দেওয়া হয়।
   ৪. প্রতিটি পোস্টে সর্বোচ্চ ১টি ছবি পাঠানো হয় (কখনোই অ্যালবাম/মিডিয়া
@@ -46,16 +44,14 @@ GEMINI_API_KEY) os.getenv() দিয়ে পড়া হয়। বাক�
 Config ক্লাসেই হার্ডকোড করা — Railway তে এর বাইরে আর কিছু সেট করার দরকার
 নেই।
 
-NOTE — Nitter ইনস্ট্যান্স সম্পর্কে সততার সাথে একটি সতর্কবার্তা: X (Twitter)
-এর আক্রমণাত্মক অ্যান্টি-স্ক্র্যাপিং পদক্ষেপের কারণে ২০২৪ সাল থেকে পাবলিক
-Nitter ইনস্ট্যান্সগুলো এমনিতেই খুব অস্থির এবং যেকোনো সময় বন্ধ হয়ে যেতে
-পারে — এটা কোনো নির্দিষ্ট কোডের বাগ না, বরং পুরো Nitter ইকোসিস্টেমের
-বাস্তবতা। তাই NITTER_INSTANCES এ একাধিক ইনস্ট্যান্স রাখা হয়েছে এবং কোড
-প্রতিটির জন্য ফলব্যাক চেষ্টা করে, কিন্তু ভবিষ্যতে সবগুলো ইনস্ট্যান্স একসাথে
-ডাউন হয়ে গেলে RSS_FEEDS (Cointelegraph, CoinDesk, Decrypt) থেকেই বট চলতে
-থাকবে (Cointelegraph এমনিতেই RSS দিয়ে কভার হয়)। ইনস্ট্যান্স তালিকা
-সময়ে সময়ে আপডেট করার প্রয়োজন হতে পারে — লাইভ স্ট্যাটাসের জন্য
-https://status.d420.de/ দেখা যেতে পারে।
+NOTE — Telegram স্ক্র্যাপিং সম্পর্কে সততার সাথে একটি সতর্কবার্তা: এই বট
+Telegram এর অফিসিয়াল Bot API ব্যবহার করে না (এটা শুধু পোস্ট করতে ব্যবহৃত
+হয়), বরং পাবলিক চ্যানেলগুলোর জন্য উন্মুক্ত ওয়েব-প্রিভিউ পেইজ (t.me/s/...)
+থেকে HTML পার্স করে খবর সংগ্রহ করে — এটা কোনো লগইন/সেশন/API key ছাড়াই
+কাজ করে, কিন্তু Telegram যেকোনো সময় এই পেইজের HTML structure পরিবর্তন
+করলে সিলেক্টরগুলো (.tgme_widget_message_text ইত্যাদি) আপডেট করার প্রয়োজন
+হতে পারে। কোনো চ্যানেল ফেচ ব্যর্থ হলে বট গ্রেসফুলি স্কিপ করে RSS_FEEDS
+(Cointelegraph, CoinDesk, Decrypt) থেকেই চলতে থাকবে।
 """
 
 import os
@@ -139,24 +135,19 @@ class Config:
         "https://decrypt.co/feed",
     ]
 
-    # ---- X/Twitter সোর্স (Nitter RSS — ফ্রি, কোনো পেইড Twitter API লাগে না) ----
-    # এটি সেকেন্ডারি/বেস্ট-এফোর্ট সোর্স হিসেবে কাজ করে। যেহেতু কোনো একক
-    # পাবলিক Nitter ইনস্ট্যান্স দীর্ঘমেয়াদে নির্ভরযোগ্য নয়, তাই একটি
-    # ইনস্ট্যান্স-তালিকা রাখা হয়েছে এবং প্রতিটি অ্যাকাউন্টের জন্য একে একে
-    # (timeout সহ) চেষ্টা করে প্রথম যেটি আসলেই এন্ট্রি ফেরত দেয় সেটাই
-    # ব্যবহার করা হয়। কোনো একাউন্টের সবগুলো ইনস্ট্যান্স ব্যর্থ হলে সেটা
-    # নিঃশব্দে/গ্রেসফুলি স্কিপ হয়ে পরের অ্যাকাউন্টে চলে যায়।
-    ENABLE_TWITTER = True
-    NITTER_INSTANCES = [
-        "https://xcancel.com",
-        "https://lightbrd.com",
-        "https://nitter.privacyredirect.com",
-        "https://nitter.poast.org",
-    ]
-    TWITTER_USERNAMES = ["tier10k", "whale_alert", "WatcherGuru", "Cointelegraph"]
-    # Nitter/RSS ফিড আনতে requests এর টাইমআউট (সেকেন্ড) — কোনো ইনস্ট্যান্স
-    # সাড়া না দিলে যেন পুরো সাইকেল আটকে না থেকে দ্রুত পরের ইনস্ট্যান্স/সোর্সে
-    # চলে যায়।
+    # ---- Telegram চ্যানেল সোর্স (পাবলিক ওয়েব-প্রিভিউ স্ক্র্যাপার — সম্পূর্ণ
+    # ফ্রি, কোনো Telegram API key/লগইন লাগে না) ----
+    # t.me/s/<channel> হলো Telegram এর পাবলিক, unauthenticated ওয়েব-প্রিভিউ
+    # এন্ডপয়েন্ট — যেকোনো পাবলিক চ্যানেলের সাম্প্রতিক পোস্টগুলো প্লেইন HTML
+    # হিসেবে দেখায়, যেটা requests + BeautifulSoup দিয়ে সরাসরি পার্স করা যায়।
+    ENABLE_TELEGRAM_SOURCE = True
+    TELEGRAM_PREVIEW_BASE = "https://t.me/s/"
+    TELEGRAM_CHANNELS = ["WatcherGuru", "cointelegraph"]
+    # প্রতিটি চ্যানেল থেকে সর্বোচ্চ কতগুলো সাম্প্রতিক পোস্ট প্রতি সাইকেলে
+    # বিবেচনা করা হবে।
+    TELEGRAM_MAX_POSTS_PER_CHANNEL = 8
+    # RSS/Telegram ফেচ করতে requests এর টাইমআউট (সেকেন্ড) — কোনো সোর্স
+    # সাড়া না দিলে যেন পুরো সাইকেল আটকে না থেকে দ্রুত পরের সোর্সে চলে যায়।
     FEED_FETCH_TIMEOUT_SECONDS = 12
 
     # ---- স্টোরেজ / ডুপ্লিকেট চেক (হার্ডকোড) ----
@@ -222,7 +213,7 @@ def validate_config():
 @dataclass
 class NewsItem:
     source_name: str
-    source_type: str  # "rss" / "twitter" / "seed"
+    source_type: str  # "rss" / "telegram" / "seed"
     title: str
     summary: str
     link: str
@@ -546,7 +537,7 @@ def run_seed_test(conn: sqlite3.Connection):
 
 
 # ---------------------------------------------------------------------------
-# ফেচার — RSS নিউজ ও Nitter (X/Twitter) RSS
+# ফেচার — RSS নিউজ ও Telegram চ্যানেল পোস্ট
 # ---------------------------------------------------------------------------
 def clean_html(raw_html: str) -> str:
     if not raw_html:
@@ -581,7 +572,7 @@ def dedupe_image_urls(urls: List[str]) -> List[str]:
 
 
 def entry_has_video(entry) -> bool:
-    """একটি RSS/Nitter এন্ট্রিতে ভিডিও, GIF, বা ভিডিও-থাম্বনেইল আছে কিনা
+    """একটি RSS এন্ট্রিতে ভিডিও, GIF, বা ভিডিও-থাম্বনেইল আছে কিনা
     শনাক্ত করে। ভিডিও থাকলে সেটা কখনোই সরাসরি ডাউনলোড/পাঠানো হয় না — বরং
     ছবি-বিহীন ধরে Pollinations.ai দিয়ে AI ছবি জেনারেট করে পাঠানো হয়।"""
     for m in getattr(entry, "media_content", []) or []:
@@ -614,7 +605,7 @@ def extract_images_from_entry(entry) -> List[str]:
     কখনোই অ্যালবাম/একাধিক ছবি পাঠায় না (দেখুন post_news_item), শুধুমাত্র
     প্রথম ইউনিক ছবিটি রিটার্ন করা হয় — normalized-dedupe এর পরে। এন্ট্রিতে
     ভিডিও/GIF থাকলে (entry_has_video) কোনো ছবিই রিটার্ন করা হয় না, তখন
-    fetch_rss_news/fetch_twitter_news পরে Pollinations.ai দিয়ে AI ছবি
+    fetch_rss_news পরে Pollinations.ai দিয়ে AI ছবি
     জেনারেট করবে।"""
     if entry_has_video(entry):
         return []
@@ -655,11 +646,10 @@ def extract_images_from_entry(entry) -> List[str]:
 
 
 def parse_feed_safely(feed_url: str, timeout: int = None):
-    """RSS/Nitter ফিড টাইমআউটসহ ফেচ করে feedparser দিয়ে পার্স করে। সরাসরি
-    feedparser.parse(url) ব্যবহার করলে কোনো সার্ভার সাড়া না দিলে
-    (বিশেষত অস্থির পাবলিক Nitter ইনস্ট্যান্স) রিকোয়েস্টটি অনির্দিষ্টকাল
-    আটকে থাকতে পারে — requests.get(timeout=...) ব্যবহার করে সেটা এড়ানো
-    হয়েছে।"""
+    """RSS ফিড টাইমআউটসহ ফেচ করে feedparser দিয়ে পার্স করে। সরাসরি
+    feedparser.parse(url) ব্যবহার করলে কোনো সার্ভার সাড়া না দিলে রিকোয়েস্টটি
+    অনির্দিষ্টকাল আটকে থাকতে পারে — requests.get(timeout=...) ব্যবহার করে
+    সেটা এড়ানো হয়েছে।"""
     resp = requests.get(
         feed_url,
         timeout=timeout or Config.FEED_FETCH_TIMEOUT_SECONDS,
@@ -701,68 +691,126 @@ def fetch_rss_news() -> List[NewsItem]:
     return items
 
 
-def fetch_twitter_news() -> List[NewsItem]:
-    """সেকেন্ডারি/বেস্ট-এফোর্ট সোর্স — পাবলিক Nitter RSS ইনস্ট্যান্স থেকে
-    টুইট সংগ্রহ করে (সম্পূর্ণ ফ্রি, কোনো Twitter API key লাগে না)।
-
-    প্রতিটি অ্যাকাউন্টের জন্য Config.NITTER_INSTANCES তালিকার ইনস্ট্যান্সগুলো
-    একে একে (টাইমআউটসহ) চেষ্টা করা হয় — প্রথম যেটি আসলেই এন্ট্রি ফেরত দেয়
-    সেটাই ব্যবহার করে থেমে যাওয়া হয়। কোনো একাউন্টের সব ইনস্ট্যান্স ব্যর্থ
-    হলে (সব ইনস্ট্যান্স ডাউন/ব্লকড) সেটা নিঃশব্দে/গ্রেসফুলি স্কিপ হয়ে পরের
-    অ্যাকাউন্টে চলে যায় — পুরো সাইকেল কখনো আটকে থাকে না বা ব্যর্থ হয় না।
-
-    কোনো পোস্টে ভিডিও/GIF থাকলে extract_images_from_entry()
-    স্বয়ংক্রিয়ভাবে সেটার ছবি ফাঁকা রাখে, ফলে post_news_item() সেটাকে
-    ছবি-বিহীন আইটেম হিসেবে ধরে Pollinations.ai দিয়ে AI ছবি বানিয়ে পাঠায়।
-
-    নোট: পাবলিক Nitter ইনস্ট্যান্সগুলো X এর অ্যান্টি-স্ক্র্যাপিং নীতির কারণে
-    মাঝে মাঝে সব একসাথে ডাউন থাকতে পারে। এমন হলে Config.NITTER_INSTANCES
-    আপডেট করুন (https://status.d420.de/ এ লাইভ স্ট্যাটাস দেখা যায়) অথবা
-    ENABLE_TWITTER=False সেট করে শুধু RSS দিয়ে চালান।
-    """
-    if not Config.ENABLE_TWITTER:
+def _extract_telegram_message_image(message_div) -> List[str]:
+    """একটি একক Telegram প্রিভিউ মেসেজ থেকে ছবির URL বের করার চেষ্টা করে —
+    .tgme_widget_message_photo_wrap (বা .tgme_widget_message_video_thumb) এর
+    inline style এর ভেতরে background-image: url('...') হিসেবে থাকে।
+    ভিডিও পোস্ট হলে (tgme_widget_message_video_wrap পাওয়া গেলে) কখনোই সেই
+    থাম্বনেইল/ভিডিও ব্যবহার করা হয় না — খালি লিস্ট রিটার্ন করা হয়, যাতে
+    caller (fetch_telegram_news) সেটাকে ছবি-বিহীন ধরে পরে Pollinations.ai
+    দিয়ে AI ছবি বানিয়ে নেয়।"""
+    if message_div.select_one(
+        ".tgme_widget_message_video_wrap, .tgme_widget_message_video, "
+        ".tgme_widget_message_roundvideo"
+    ):
         return []
-    items: List[NewsItem] = []
-    for username in Config.TWITTER_USERNAMES:
-        entries = None
-        working_instance = None
-        for base in Config.NITTER_INSTANCES:
-            feed_url = f"{base.rstrip('/')}/{username}/rss"
-            try:
-                parsed = parse_feed_safely(feed_url, timeout=Config.FEED_FETCH_TIMEOUT_SECONDS)
-                if parsed.entries:
-                    entries = parsed.entries
-                    working_instance = base
-                    break
-                log.info(f"{base} থেকে @{username} এর কোনো এন্ট্রি পাওয়া যায়নি, পরের ইনস্ট্যান্স চেষ্টা করা হচ্ছে")
-            except Exception as e:
-                log.warning(f"{base} থেকে @{username} ফেচ ব্যর্থ ({e}) — পরের ইনস্ট্যান্স চেষ্টা করা হচ্ছে")
-                continue
 
-        if not entries:
-            log.warning(f"@{username} এর জন্য কোনো Nitter ইনস্ট্যান্সই কাজ করেনি — এই সাইকেলে গ্রেসফুলি স্কিপ করা হচ্ছে")
+    images: List[str] = []
+    photo_wrap = message_div.select_one(".tgme_widget_message_photo_wrap")
+    if photo_wrap is not None:
+        style = photo_wrap.get("style", "") or ""
+        m = re.search(r"url\((['\"]?)(.*?)\1\)", style)
+        if m and m.group(2):
+            images.append(m.group(2))
+
+    return dedupe_image_urls(images)[:1]
+
+
+def fetch_telegram_news() -> List[NewsItem]:
+    """সেকেন্ডারি নিউজ সোর্স — পাবলিক Telegram চ্যানেলগুলো
+    (Config.TELEGRAM_CHANNELS, যেমন WatcherGuru ও Cointelegraph) থেকে
+    সাম্প্রতিক পোস্ট সংগ্রহ করে। এটি Telegram এর অফিসিয়াল Bot/Client API
+    ব্যবহার করে না (কোনো লগইন/সেশন/টোকেন লাগে না) — বরং প্রতিটি পাবলিক
+    চ্যানেলের জন্য উন্মুক্ত ওয়েব-প্রিভিউ পেইজ (https://t.me/s/<channel>)
+    সরাসরি `requests` দিয়ে ফেচ করে `BeautifulSoup` দিয়ে পার্স করা হয়।
+
+    প্রতিটি মেসেজ ব্লক (.tgme_widget_message_wrap) থেকে টেক্সট
+    (.tgme_widget_message_text), প্রাইমারি ছবি
+    (.tgme_widget_message_photo_wrap) এবং পার্মালিংক
+    (a.tgme_widget_message_date) বের করা হয়। যে পোস্টে কোনো টেক্সট নেই
+    (শুধুই ছবি/ভিডিও/ফরওয়ার্ড হেডার) সেটা স্কিপ করা হয়, কারণ headline
+    জেনারেট করার মতো কোনো কনটেন্ট নেই।
+
+    কোনো চ্যানেল ফেচ/পার্স করতে ব্যর্থ হলে (নেটওয়ার্ক এরর, টাইমআউট,
+    Telegram এর HTML structure বদলে যাওয়া, ইত্যাদি) exception ধরে সেটা লগ
+    করে গ্রেসফুলি স্কিপ করে পরের চ্যানেলে চলে যাওয়া হয় — পুরো পোলিং লুপ
+    কখনো ক্র্যাশ করে না।
+
+    ডিডুপ্লিকেশন RSS এর মতোই SQLite link hash (NewsItem.link_hash) দিয়ে হয়
+    (process_item/is_link_seen), তাই এখানে আলাদা কিছু করার দরকার নেই।
+    """
+    if not Config.ENABLE_TELEGRAM_SOURCE:
+        return []
+
+    items: List[NewsItem] = []
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        )
+    }
+
+    for channel in Config.TELEGRAM_CHANNELS:
+        url = f"{Config.TELEGRAM_PREVIEW_BASE}{channel}"
+        try:
+            resp = requests.get(
+                url,
+                headers=headers,
+                timeout=Config.FEED_FETCH_TIMEOUT_SECONDS,
+            )
+            resp.raise_for_status()
+        except Exception as e:
+            log.warning(f"Telegram চ্যানেল ফেচ ব্যর্থ @{channel} ({url}): {e}")
             continue
 
-        log.info(f"@{username} এর ফিড {working_instance} থেকে সফলভাবে পাওয়া গেছে")
-        for entry in entries[:5]:
-            link = entry.get("link")
-            if not link:
-                continue
-            title = clean_html(entry.get("title", ""))
-            summary = clean_html(entry.get("description", ""))
-            if entry_has_video(entry):
-                log.info(f"@{username} এর একটি পোস্টে ভিডিও/GIF পাওয়া গেছে — ভিডিও স্কিপ করে AI ছবি ব্যবহার হবে")
-            items.append(
-                NewsItem(
-                    source_name=f"@{username}",
-                    source_type="twitter",
-                    title=title,
-                    summary=summary[:600],
-                    link=link,
-                    images=extract_images_from_entry(entry),
-                    published=entry.get("published"),
+        try:
+            soup = BeautifulSoup(resp.text, "html.parser")
+            message_wraps = soup.select("div.tgme_widget_message_wrap")
+            if not message_wraps:
+                log.warning(
+                    f"@{channel} এর প্রিভিউ পেইজে কোনো মেসেজ পাওয়া যায়নি — "
+                    "চ্যানেলটি প্রাইভেট/অস্তিত্বহীন হতে পারে অথবা Telegram "
+                    "HTML structure বদলে গেছে, এই সাইকেলে স্কিপ করা হচ্ছে"
                 )
-            )
+                continue
+
+            # পেইজের নিচের দিকের ব্লকগুলোই সবচেয়ে সাম্প্রতিক পোস্ট।
+            recent_wraps = message_wraps[-Config.TELEGRAM_MAX_POSTS_PER_CHANNEL :]
+            for wrap in recent_wraps:
+                try:
+                    text_div = wrap.select_one(".tgme_widget_message_text")
+                    if text_div is None:
+                        continue  # শুধু মিডিয়া/ফরওয়ার্ড, কোনো টেক্সট নেই
+                    text = clean_html(str(text_div))
+                    if not text:
+                        continue
+
+                    date_link = wrap.select_one("a.tgme_widget_message_date")
+                    link = date_link.get("href") if date_link is not None else None
+                    if not link:
+                        continue
+
+                    images = _extract_telegram_message_image(wrap)
+
+                    items.append(
+                        NewsItem(
+                            source_name=f"@{channel}",
+                            source_type="telegram",
+                            title=text[:200],
+                            summary=text[:600],
+                            link=link,
+                            images=images,
+                        )
+                    )
+                except Exception as e:
+                    log.warning(f"@{channel} এর একটি মেসেজ পার্স করতে ব্যর্থ: {e}")
+                    continue
+
+            log.info(f"@{channel} থেকে {len(recent_wraps)}টি সাম্প্রতিক Telegram পোস্ট পাওয়া গেছে")
+        except Exception as e:
+            log.warning(f"@{channel} এর HTML পার্স করতে ব্যর্থ: {e}")
+            continue
+
     return items
 
 
@@ -773,7 +821,7 @@ def fetch_twitter_news() -> List[NewsItem]:
 _genai_client = None
 
 DEFAULT_EMOJI = "🚨"  # ইমোজি নির্বাচন ব্যর্থ হলে এই ডিফল্ট ইমোজি ব্যবহার হবে
-DEFAULT_SENTIMENT = "BULLISH"  # সেন্টিমেন্ট পার্স করা না গেলে এই ডিফল্ট ব্যবহার হবে
+DEFAULT_SENTIMENT = "NEUTRAL"  # সেন্টিমেন্ট পার্স করা না গেলে এই ডিফল্ট ব্যবহার হবে
 
 
 def get_genai_client():
@@ -836,9 +884,17 @@ If "is_important" is false, "headline" can be a short placeholder — it will
 not be used or posted.
 
 STEP 2 — MARKET SENTIMENT:
-"sentiment" MUST be EXACTLY one of these two strings: "BULLISH" or "BEARISH" —
-never any other word, never neutral/mixed. Choose whichever direction is the
-closer, more likely overall market implication of this specific news.
+"sentiment" MUST be EXACTLY one of these three strings: "BULLISH", "BEARISH",
+or "NEUTRAL" — never any other word.
+  - Use "BULLISH" when the news has a clearly positive/upward market impact
+    (e.g. ETF inflow, major adoption, bullish price breakout, favorable
+    regulation).
+  - Use "BEARISH" when the news has a clearly negative/downward market impact
+    (e.g. hack, ban, lawsuit, crash, outflow, regulatory crackdown).
+  - Use "NEUTRAL" when the impact is moderate/low, purely informational, or
+    balanced/mixed with no clear directional lean (e.g. a routine but
+    still-notable announcement, a delayed decision with no verdict yet, a
+    general market-structure update).
 
 STEP 3 — EMOJI (only matters if is_important is true):
 "emoji": ONE or TWO emoji characters (as a single string, no spaces) chosen
@@ -877,7 +933,7 @@ STRICT RULES FOR "headline":
 
 Respond with ONLY a valid JSON object in this exact shape, nothing else,
 no markdown code fences, no explanation:
-{{"is_important": true/false, "sentiment": "BULLISH"/"BEARISH", "emoji": "...", "headline": "..."}}
+{{"is_important": true/false, "sentiment": "BULLISH"/"BEARISH"/"NEUTRAL", "emoji": "...", "headline": "..."}}
 
 CONTENT:
 Title: {title}
@@ -904,11 +960,11 @@ def _sanitize_emoji(emoji: str) -> str:
 
 
 def _sanitize_sentiment(sentiment) -> str:
-    """সেন্টিমেন্ট ফিল্ডকে কড়াভাবে শুধু "BULLISH" বা "BEARISH" এর মধ্যে
-    সীমাবদ্ধ রাখে — Gemini অন্য কিছু (neutral, mixed, ইত্যাদি) লিখে ফেললেও
-    ক্যাপশনে কখনো সেটা যাবে না।"""
+    """সেন্টিমেন্ট ফিল্ডকে কড়াভাবে শুধু "BULLISH", "BEARISH" বা "NEUTRAL"
+    এর মধ্যে সীমাবদ্ধ রাখে — Gemini অন্য কিছু (mixed, unclear, ইত্যাদি)
+    লিখে ফেললেও ক্যাপশনে কখনো সেটা যাবে না, বরং NEUTRAL এ পড়ে যাবে।"""
     value = str(sentiment or "").strip().upper()
-    if value in ("BULLISH", "BEARISH"):
+    if value in ("BULLISH", "BEARISH", "NEUTRAL"):
         return value
     return DEFAULT_SENTIMENT
 
@@ -1055,9 +1111,15 @@ def tg_url(method: str) -> str:
 def build_caption(emoji: str, headline_bn: str, source_link: str, sentiment: str) -> str:
     """ক্যাপশন তৈরি করে — হেডলাইনের পরে, Source/Follow লিংকের আগে একটি
     সম্পূর্ণ ইংরেজি "MARKET HINT" লাইন যোগ করা হয়েছে, যা Gemini এর
-    সেন্টিমেন্ট বিশ্লেষণ অনুযায়ী শুধুমাত্র BULLISH 🟢 বা BEARISH 🔴 দেখায়।"""
+    সেন্টিমেন্ট বিশ্লেষণ অনুযায়ী BULLISH 🟢 / BEARISH 🔴 / NEUTRAL ⚪
+    এর একটি দেখায়।"""
     sentiment = _sanitize_sentiment(sentiment)
-    sentiment_emoji = "🟢" if sentiment == "BULLISH" else "🔴"
+    if sentiment == "BULLISH":
+        sentiment_emoji = "🟢"
+    elif sentiment == "BEARISH":
+        sentiment_emoji = "🔴"
+    else:
+        sentiment_emoji = "⚪"
     return (
         f"{emoji} <b>{headline_bn}</b>\n\n"
         f"📊 <b>MARKET HINT:</b> <b>{sentiment}</b> {sentiment_emoji}\n\n"
@@ -9447,8 +9509,8 @@ def run_cycle(conn: sqlite3.Connection):
     """একবার সব সোর্স থেকে খবর নিয়ে এসে যতগুলো সম্ভব প্রসেস করে।"""
     all_items: List[NewsItem] = []
     all_items.extend(fetch_rss_news())
-    all_items.extend(fetch_twitter_news())
-    log.info(f"এই সাইকেলে মোট {len(all_items)}টি খবর/টুইট পাওয়া গেছে।")
+    all_items.extend(fetch_telegram_news())
+    log.info(f"এই সাইকেলে মোট {len(all_items)}টি খবর/পোস্ট পাওয়া গেছে।")
 
     processed = 0
     for item in all_items:
@@ -9464,7 +9526,7 @@ def run_cycle(conn: sqlite3.Connection):
 
 
 def main():
-    """মূল ফাংশন — কনফিগারেশন যাচাই করে সরাসরি আসল RSS/Twitter মনিটরিং লুপ
+    """মূল ফাংশন — কনফিগারেশন যাচাই করে সরাসরি আসল RSS/Telegram মনিটরিং লুপ
     চালু করে।"""
     validate_config()
     conn = get_db()
