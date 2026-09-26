@@ -179,17 +179,27 @@ class Config:
 
     FOLLOW_CHANNEL_URL = "https://t.me/cryptobartalove1"
 
+    # ---- প্রাইস মাইলস্টোন অ্যালার্টের কাস্টম হাইপারলিংক (@btc_price /
+    # @eth_price ট্যাগ ক্লিক করলে এই লিংকে যাবে) ----
+    MILESTONE_ALERT_LINK_URL = "https://t.me/tmmusa73"
+
     # ---- BTC/ETH প্রাইস মাইলস্টোন অ্যালার্ট (হার্ডকোড) ----
     ENABLE_PRICE_ALERTS = True
     BINANCE_TICKER_URL = "https://api.binance.com/api/v3/ticker/price"
     BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"
+    # ২৪-ঘণ্টার টিকার স্ট্যাটিস্টিক্স (priceChangePercent সহ) — কার্ডের বড়
+    # দামের রঙ (সবুজ/লাল) এই এন্ডপয়েন্ট অনুযায়ী নির্ধারণ করা হয়।
+    BINANCE_24HR_TICKER_URL = "https://api.binance.com/api/v3/ticker/24hr"
     COINGECKO_PRICE_URL = "https://api.coingecko.com/api/v3/simple/price"
     PRICE_CHECK_MIN_SECONDS = 30
     PRICE_CHECK_MAX_SECONDS = 45
     ETH_MILESTONE_STEP = 50
     BTC_MILESTONE_STEP = 500
     # একই মাইলস্টোন ভ্যালু (যেমন BTC $80,500) ২৪ ঘণ্টার মধ্যে দ্বিতীয়বার
-    # ট্রিগার হলে অ্যালার্ট পাঠানো হবে না (anti-spam / anti-bounce)।
+    # ট্রিগার হলে অ্যালার্ট পাঠানো হবে না (anti-spam / anti-bounce) — এটাই
+    # "একই মাইলস্টোনে বাউন্স করলে বারবার অ্যালার্ট না যাওয়া" এর মূল প্রয়োগ,
+    # SQLite এর milestone_alerts টেবিলে persist করা থাকে (বট রিস্টার্ট হলেও
+    # ধরে থাকে)।
     MILESTONE_COOLDOWN_HOURS = 24
     # প্রাইস কার্ডের সাইজ (Pillow দিয়ে রেন্ডার করা)
     PRICE_CARD_WIDTH = 1000
@@ -1262,18 +1272,20 @@ def build_caption(
     return caption
 
 
-def send_text_message(caption: str) -> bool:
+def send_text_message(caption: str, parse_mode: str = "HTML") -> bool:
     """ছবি ছাড়া শুধু টেক্সট পোস্ট করে (যখন কোনো ছবিই পাওয়া যায়নি)।
     disable_web_page_preview=true পাঠানো হয় যাতে ক্যাপশনের ভেতরের Source/
-    Follow লিংক থেকে Telegram স্বয়ংক্রিয়ভাবে কোনো webpage preview কার্ড
-    (নিচে অতিরিক্ত বক্স) দেখিয়ে না দেয় — মেসেজটা পরিষ্কার/ক্লিন থাকে।"""
+    Follow/কাস্টম লিংক থেকে Telegram স্বয়ংক্রিয়ভাবে কোনো webpage preview
+    কার্ড (নিচে অতিরিক্ত বক্স) দেখিয়ে না দেয় — মেসেজটা পরিষ্কার/ক্লিন থাকে।
+    parse_mode "HTML" (ডিফল্ট, সাধারণ নিউজ পোস্টের জন্য) অথবা "Markdown"
+    (প্রাইস মাইলস্টোন অ্যালার্টের কাস্টম হাইপারলিংক ফরম্যাটের জন্য) হতে পারে।"""
     try:
         resp = requests.post(
             tg_url("sendMessage"),
             data={
                 "chat_id": Config.TELEGRAM_CHANNEL_ID,
                 "text": caption,
-                "parse_mode": "HTML",
+                "parse_mode": parse_mode,
                 "disable_web_page_preview": "true",
             },
             timeout=30,
@@ -1285,15 +1297,19 @@ def send_text_message(caption: str) -> bool:
         return False
 
 
-def send_single_photo(caption: str, image_url: str = None, image_bytes: bytes = None) -> bool:
+def send_single_photo(
+    caption: str, image_url: str = None, image_bytes: bytes = None, parse_mode: str = "HTML"
+) -> bool:
     """একটি ছবিসহ পোস্ট করে — সোর্স URL অথবা ডাউনলোড করা bytes, দুটোই সাপোর্ট
     করে। বট কখনোই sendMediaGroup (অ্যালবাম) ব্যবহার করে না — সবসময় ঠিক
-    একটি ছবি sendPhoto দিয়ে পাঠানো হয়।"""
+    একটি ছবি sendPhoto দিয়ে পাঠানো হয়। parse_mode "HTML" (ডিফল্ট) অথবা
+    "Markdown" (প্রাইস মাইলস্টোন অ্যালার্টের কাস্টম হাইপারলিংক ফরম্যাটের
+    জন্য) হতে পারে।"""
     try:
         data = {
             "chat_id": Config.TELEGRAM_CHANNEL_ID,
             "caption": caption,
-            "parse_mode": "HTML",
+            "parse_mode": parse_mode,
         }
         if image_bytes:
             files = {"photo": ("image.jpg", io.BytesIO(image_bytes))}
@@ -1372,15 +1388,16 @@ def fetch_spot_price(symbol: str) -> Optional[float]:
         return None
 
 
-def fetch_recent_candles(symbol: str, limit: int = 4) -> List[Tuple[float, float]]:
-    """Binance থেকে সর্বশেষ কয়েকটি ১৫-মিনিটের ক্যান্ডেল (klines) আনে এবং
-    প্রতিটির (open, close) টাপল রিটার্ন করে — প্রাইস কার্ডের মিনি
-    ক্যান্ডেলস্টিকগুলো এই আসল ডেটা অনুযায়ী সবুজ/লাল রঙ করা হয়। ব্যর্থ হলে
-    খালি লিস্ট রিটার্ন করে (কার্ড তখন নিরপেক্ষ ধূসর ক্যান্ডেল দেখাবে)।"""
+def fetch_recent_candles(symbol: str, limit: int = 4) -> List[Tuple[float, float, float, float]]:
+    """Binance থেকে সর্বশেষ কয়েকটি ৪-ঘণ্টার (4h) ক্যান্ডেল (klines) আনে এবং
+    প্রতিটির (open, high, low, close) টাপল রিটার্ন করে — প্রাইস কার্ডের মিনি
+    ক্যান্ডেলস্টিকগুলো (বডি + উইক) এই আসল OHLC ডেটা অনুযায়ী আঁকা ও
+    সবুজ/লাল রঙ করা হয়। ব্যর্থ হলে খালি লিস্ট রিটার্ন করে (কার্ড তখন
+    নিরপেক্ষ ধূসর ক্যান্ডেল দেখাবে)।"""
     try:
         resp = requests.get(
             Config.BINANCE_KLINES_URL,
-            params={"symbol": symbol, "interval": "15m", "limit": limit},
+            params={"symbol": symbol, "interval": "4h", "limit": limit},
             timeout=10,
         )
         resp.raise_for_status()
@@ -1388,12 +1405,30 @@ def fetch_recent_candles(symbol: str, limit: int = 4) -> List[Tuple[float, float
         candles = []
         for k in data:
             open_price = float(k[1])
+            high_price = float(k[2])
+            low_price = float(k[3])
             close_price = float(k[4])
-            candles.append((open_price, close_price))
+            candles.append((open_price, high_price, low_price, close_price))
         return candles
     except Exception as e:
-        log.warning(f"{symbol} এর ক্যান্ডেল ডেটা আনতে ব্যর্থ: {e}")
+        log.warning(f"{symbol} এর 4h ক্যান্ডেল ডেটা আনতে ব্যর্থ: {e}")
         return []
+
+
+def fetch_24hr_change_percent(symbol: str) -> Optional[float]:
+    """Binance এর /ticker/24hr এন্ডপয়েন্ট থেকে priceChangePercent আনে —
+    প্রাইস কার্ডের বড় দাম টেক্সটের রঙ (সবুজ/লাল) এই আসল ২৪-ঘণ্টার মার্কেট
+    পরিবর্তনের ওপর ভিত্তি করে নির্ধারিত হয়, মাইলস্টোন ক্রসিং-এর দিক থেকে নয়।
+    ব্যর্থ হলে None রিটার্ন করে।"""
+    try:
+        resp = requests.get(
+            Config.BINANCE_24HR_TICKER_URL, params={"symbol": symbol}, timeout=10
+        )
+        resp.raise_for_status()
+        return float(resp.json()["priceChangePercent"])
+    except Exception as e:
+        log.warning(f"{symbol} এর 24hr priceChangePercent আনতে ব্যর্থ: {e}")
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -9317,7 +9352,20 @@ def _get_embedded_font_bold_bytes() -> Optional[bytes]:
     global _embedded_font_bold_bytes
     if _embedded_font_bold_bytes is None:
         try:
-            _embedded_font_bold_bytes = base64.b64decode(_EMBEDDED_FONT_BOLD_B64)
+            # যেকোনো হোয়াইটস্পেস (নিউলাইন/স্পেস/ট্যাব/ক্যারেজ-রিটার্ন) — এই
+            # স্ট্রিংটি যেভাবেই ফরম্যাট বা ইনডেন্ট করা হোক না কেন — নিরাপদে
+            # সরিয়ে ফেলা হয়, তারপর প্রয়োজনে '=' প্যাডিং ঠিক করে দেওয়া হয়,
+            # যাতে base64 ডিকোড কখনো ভুল হোয়াইটস্পেস/প্যাডিং এর কারণে ব্যর্থ
+            # না হয়।
+            cleaned = "".join(_EMBEDDED_FONT_BOLD_B64.split())
+            padding_needed = (-len(cleaned)) % 4
+            if padding_needed:
+                cleaned += "=" * padding_needed
+            decoded = base64.b64decode(cleaned, validate=False)
+            if not decoded:
+                raise ValueError("ডিকোড করা ফন্ট bytes খালি")
+            _embedded_font_bold_bytes = decoded
+            log.info(f"এম্বেডেড বোল্ড ফন্ট সফলভাবে ডিকোড হয়েছে ({len(decoded):,} bytes)।")
         except Exception as e:
             log.error(f"এম্বেডেড ফন্ট base64 ডিকোড করতে ব্যর্থ: {e}")
             _embedded_font_bold_bytes = b""
@@ -9345,10 +9393,13 @@ def _load_font(size: int, bold: bool = True) -> ImageFont.ImageFont:
         embedded_bytes = _get_embedded_font_bold_bytes()
         if embedded_bytes:
             try:
+                # io.BytesIO থেকে সরাসরি in-memory লোড — ডিস্কে কোনো
+                # সাময়িক ফাইল লেখার প্রয়োজন নেই। FreeTypeFont অবজেক্ট
+                # সফলভাবে তৈরি হলেই ধরে নেওয়া হয় ফন্ট বৈধ।
                 font = ImageFont.truetype(io.BytesIO(embedded_bytes), size)
             except Exception as e:
                 log.warning(
-                    f"এম্বেডেড বোল্ড ফন্ট লোড করতে ব্যর্থ, সিস্টেম ফন্টে "
+                    f"এম্বেডেড বোল্ড ফন্ট (size={size}) লোড করতে ব্যর্থ, সিস্টেম ফন্টে "
                     f"ফলব্যাক করা হচ্ছে: {e}"
                 )
 
@@ -9414,34 +9465,80 @@ def _draw_eth_logo(draw: ImageDraw.ImageDraw, cx: int, cy: int, r: int):
 
 def _draw_mini_candles(
     draw: ImageDraw.ImageDraw,
-    candles: List[Tuple[float, float]],
+    candles: List[Tuple[float, float, float, float]],
     start_x: int,
     center_y: int,
     count: int = 4,
-    spacing: int = 46,
-    body_width: int = 18,
+    spacing: int = 64,
+    body_width: int = 26,
+    max_height: int = 190,
 ):
-    """৩-৪টি মিনি ক্যান্ডেলস্টিক (উইক-সহ) আঁকে। প্রতিটি ক্যান্ডেলের রঙ
-    Binance থেকে আনা আসল (open, close) ডেটার ওপর ভিত্তি করে সবুজ/লাল
-    নির্ধারণ করা হয় — ডেটা না থাকলে নিরপেক্ষ ধূসর দেখানো হয়।"""
+    """৪টি মিনি ক্যান্ডেলস্টিক (real body + wick) আঁকে, Binance থেকে আনা
+    আসল 4h (open, high, low, close) ডেটা অনুযায়ী প্রোপোরশনালি স্কেল করে:
+      - সবগুলো ক্যান্ডেলের high/low জুড়ে একটি common price-scale বের করে
+        নেওয়া হয়, যাতে ৪টি ক্যান্ডেলের আপেক্ষিক উচ্চতা/অবস্থান আসল মার্কেট
+        মুভমেন্টের সাথে সামঞ্জস্যপূর্ণ থাকে (শুধু র‍্যান্ডম উচ্চতা নয়)।
+      - body: open->close এর প্রকৃত রেঞ্জ (সবুজ হলে close>=open, নাহলে লাল)।
+      - wick: high->low এর প্রকৃত রেঞ্জ।
+      - ডেটা না থাকলে (ফেচ ব্যর্থ হলে) নিরপেক্ষ ধূসর placeholder ক্যান্ডেল
+        দেখানো হয়।
+    """
     if not candles:
-        candles = [(0, 0)] * count
+        candles = [(0.0, 0.0, 0.0, 0.0)] * count
     candles = candles[-count:]
     if len(candles) < count:
-        candles = [(0, 0)] * (count - len(candles)) + candles
+        candles = [(0.0, 0.0, 0.0, 0.0)] * (count - len(candles)) + candles
 
-    for i, (open_p, close_p) in enumerate(candles):
+    def _is_placeholder(c: Tuple[float, float, float, float]) -> bool:
+        return c[0] == 0 and c[1] == 0 and c[2] == 0 and c[3] == 0
+
+    real_candles = [c for c in candles if not _is_placeholder(c)]
+
+    if real_candles:
+        global_high = max(c[1] for c in real_candles)
+        global_low = min(c[2] for c in real_candles)
+        price_range = global_high - global_low
+        if price_range <= 0:
+            # সব ক্যান্ডেল একই দামে ফ্ল্যাট — division-by-zero এড়াতে একটি
+            # ছোট আর্টিফিশিয়াল রেঞ্জ ব্যবহার করা হয়
+            price_range = max(global_high, 1.0) * 0.001
+    else:
+        global_high = global_low = None
+        price_range = None
+
+    top_y = center_y - max_height / 2
+    bottom_y = center_y + max_height / 2
+    min_body_px = 4  # doji/সমান open-close হলেও শরীরটা যেন দৃশ্যমান থাকে
+
+    def y_for(price: float) -> float:
+        ratio = (price - global_low) / price_range
+        ratio = min(max(ratio, 0.0), 1.0)
+        return bottom_y - ratio * max_height
+
+    wick_width = max(3, body_width // 7)
+
+    for i, (open_p, high_p, low_p, close_p) in enumerate(candles):
         x = start_x + i * spacing
-        if open_p == 0 and close_p == 0:
+        if _is_placeholder((open_p, high_p, low_p, close_p)) or price_range is None:
             color = "#5A5A5A"
+            body_top = center_y - max_height * 0.14
+            body_bottom = center_y + max_height * 0.10
+            wick_top = body_top - max_height * 0.18
+            wick_bottom = body_bottom + max_height * 0.18
         else:
             color = "#00E676" if close_p >= open_p else "#FF1744"
-        body_top = center_y - random.randint(18, 42)
-        body_bottom = center_y + random.randint(10, 34)
-        wick_extra = max(8, body_width // 2)
-        draw.line((x, body_top - wick_extra, x, body_bottom + wick_extra), fill=color, width=max(2, body_width // 6))
-        draw.rectangle(
+            wick_top = y_for(high_p)
+            wick_bottom = y_for(low_p)
+            body_top = y_for(max(open_p, close_p))
+            body_bottom = y_for(min(open_p, close_p))
+            if body_bottom - body_top < min_body_px:
+                mid = (body_top + body_bottom) / 2
+                body_top, body_bottom = mid - min_body_px / 2, mid + min_body_px / 2
+
+        draw.line((x, wick_top, x, wick_bottom), fill=color, width=wick_width)
+        draw.rounded_rectangle(
             (x - body_width / 2, body_top, x + body_width / 2, body_bottom),
+            radius=max(3, body_width // 6),
             fill=color,
         )
 
@@ -9455,9 +9552,10 @@ def generate_price_card_bytes(
       - কালো ব্যাকগ্রাউন্ড, রাউন্ডেড-কর্নার কার্ড
       - বাঁ পাশে কয়েনের বৃত্তাকার লোগো (BTC কমলা / ETH নীল-ধূসর)
       - উপরে বোল্ড সাদা কয়েনের নাম ও সিম্বল, যেমন "Bitcoin (BTC)"
-      - মাঝে বড় দাম — মাইলস্টোন আগেরটির চেয়ে বেশি হলে সবুজ, কম হলে লাল
-      - ডান পাশে ৩-৪টি মিনি ক্যান্ডেলস্টিক, Binance এর আসল ১৫-মিনিট
-        ক্যান্ডেল অনুযায়ী রঙ করা
+      - মাঝে বড় দাম — আসল ২৪ ঘণ্টার priceChangePercent পজিটিভ/শূন্য হলে
+        সবুজ, নেগেটিভ হলে লাল
+      - ডান পাশে ৪টি মিনি ক্যান্ডেলস্টিক, Binance এর আসল 4h (4-ঘণ্টার)
+        OHLC ক্যান্ডেল অনুযায়ী স্কেল ও রঙ করা (real open/close/high/low)
       - নিচে ফুটার টেক্সট: BTC এর জন্য "BTC PRICE", ETH এর জন্য "ETH PRICE"
         (সবসময় ক্যাপিটাল লেটারে)
     ব্যর্থ হলে (ফন্ট/ড্রয়িং সমস্যা) None রিটার্ন করে — caller তখন প্লেইন
@@ -9472,6 +9570,19 @@ def generate_price_card_bytes(
         footer_font = _load_font(size=30, bold=True)
         price_text = f"${price:,.2f}"
 
+        # --- বড় দামের রঙ: আসল ২৪-ঘণ্টার মার্কেট পরিবর্তন (priceChangePercent)
+        # অনুযায়ী নির্ধারিত হয় — নেগেটিভ (<0%) হলে লাল, পজিটিভ/শূন্য (>=0%)
+        # হলে সবুজ। মাইলস্টোন ক্রসিং-এর দিক (is_up) শুধু ফলব্যাক হিসেবে
+        # ব্যবহৃত হয়, যদি 24hr এন্ডপয়েন্ট ফেচ করতে ব্যর্থ হয়।
+        change_percent = fetch_24hr_change_percent(symbol)
+        if change_percent is not None:
+            price_is_up = change_percent >= 0
+        else:
+            price_is_up = is_up
+        price_color = "#00E676" if price_is_up else "#FF1744"
+        if price_is_up is None:
+            price_color = "#FFFFFF"
+
         # --- আগে একটি স্ক্র্যাচ ইমেজে টেক্সটের প্রকৃত সাইজ মেপে নেওয়া হয়,
         # যাতে দাম যতই লম্বা হোক (যেমন $84,313.36), সেটা কখনো ডান পাশের
         # ক্যান্ডেলস্টিকের সাথে ওভারল্যাপ না করে — ক্যানভাসের প্রস্থ
@@ -9483,10 +9594,16 @@ def generate_price_card_bytes(
         logo_cx = margin + 70 + logo_r
         text_x = logo_cx + logo_r + 55
 
-        candle_start_x = text_x + price_w + 70
-        candle_spacing = 46
+        # --- ডান পাশের ৪টি 4h মিনি ক্যান্ডেলস্টিকের জন্য বড়, প্রোপোরশনাল
+        # স্পেসিং/সাইজ — টেক্সট ব্লকের ঠিক পরে, কার্ডের সাথে ভারসাম্যপূর্ণ
+        # দূরত্বে শুরু হয়।
         candle_count = 4
-        content_end_x = candle_start_x + (candle_count - 1) * candle_spacing + 60
+        candle_spacing = 64
+        candle_body_width = 26
+        candle_max_height = int(height * 0.56)
+        candle_block_width = (candle_count - 1) * candle_spacing + candle_body_width
+        candle_start_x = text_x + price_w + 90
+        content_end_x = candle_start_x + candle_block_width + 50
         width = max(Config.PRICE_CARD_WIDTH, content_end_x + margin)
 
         img = Image.new("RGB", (width, height), color="#050506")
@@ -9510,18 +9627,24 @@ def generate_price_card_bytes(
         # --- উপরে কয়েনের নাম ও সিম্বল ---
         draw.text((text_x, margin + 40), f"{name} ({ticker})", font=name_font, fill="#FFFFFF")
 
-        # --- মাঝে বড় দাম (আপ হলে সবুজ, ডাউন হলে লাল) ---
-        price_color = "#00E676" if is_up else "#FF1744"
-        if is_up is None:
-            price_color = "#FFFFFF"
+        # --- মাঝে বড় দাম ---
         draw.text((text_x, margin + 105), price_text, font=price_font, fill=price_color)
 
         # --- ফুটার টেক্সট (সবসময় ক্যাপিটাল লেটারে) ---
         draw.text((text_x, height - margin - 62), footer_text.upper(), font=footer_font, fill="#B7B7C0")
 
-        # --- ডান পাশে মিনি ক্যান্ডেলস্টিক (আসল Binance ডেটা অনুযায়ী রঙ) ---
-        candles = fetch_recent_candles(symbol, limit=4)
-        _draw_mini_candles(draw, candles, candle_start_x, height // 2, count=candle_count, spacing=candle_spacing)
+        # --- ডান পাশে মিনি ক্যান্ডেলস্টিক (আসল Binance 4h OHLC ডেটা অনুযায়ী) ---
+        candles = fetch_recent_candles(symbol, limit=candle_count)
+        _draw_mini_candles(
+            draw,
+            candles,
+            candle_start_x,
+            height // 2,
+            count=candle_count,
+            spacing=candle_spacing,
+            body_width=candle_body_width,
+            max_height=candle_max_height,
+        )
 
         buf = io.BytesIO()
         img.save(buf, format="PNG")
@@ -9575,22 +9698,25 @@ def check_price_milestone(conn: sqlite3.Connection, symbol: str):
     direction_emoji = "📈" if is_up else "📉"
     log.info(f"{name} মাইলস্টোন ক্রস হয়েছে: ${last_milestone:,.0f} -> ${milestone:,.0f} ({direction_emoji})")
 
-    formatted_price = f"{milestone:,.0f}"
-    caption = (
-        f'{direction_emoji} <b>{name} ${formatted_price}</b>\n\n'
-        f'🔔 <b>Follow:</b> <a href="{Config.FOLLOW_CHANNEL_URL}"><b>CRYPTO BARTA</b></a>'
-    )
+    # --- ক্যাপশন: একদম একটি লাইনে, কাস্টম টেলিগ্রাম হাইপারলিংকসহ ---
+    # ফরম্যাট: 📈 $84,022.00 [@btc_price](https://t.me/tmmusa73)
+    # coin_tag ("@btc_price"/"@eth_price") ক্লিক করলে সরাসরি
+    # https://t.me/tmmusa73 তে নিয়ে যাবে। এখানে দাম সবসময় আসল লাইভ স্পট
+    # প্রাইস (milestone-এ রাউন্ড করা ভ্যালু নয়), সেন্ট পর্যন্ত ফরম্যাট করা।
+    coin_tag = "@btc_price" if ticker == "BTC" else "@eth_price"
+    formatted_price = f"${price:,.2f}"
+    caption = f"{direction_emoji} {formatted_price} [{coin_tag}]({Config.MILESTONE_ALERT_LINK_URL})"
 
     image_bytes = generate_price_card_bytes(symbol, price, is_up)
     if image_bytes:
-        sent = send_single_photo(caption, image_bytes=image_bytes)
+        sent = send_single_photo(caption, image_bytes=image_bytes, parse_mode="Markdown")
     else:
         log.warning(f"{name} এর জন্য প্রাইস কার্ড রেন্ডার ব্যর্থ, শুধু টেক্সট পাঠানো হচ্ছে।")
-        sent = send_text_message(caption)
+        sent = send_text_message(caption, parse_mode="Markdown")
 
     if sent:
         record_milestone_alert(conn, symbol, milestone)
-        log.info(f"{name} মাইলস্টোন অ্যালার্ট পোস্ট হয়েছে: {direction_emoji} ${formatted_price}")
+        log.info(f"{name} মাইলস্টোন অ্যালার্ট পোস্ট হয়েছে: {direction_emoji} {formatted_price} {coin_tag}")
 
 
 def price_alert_loop():
