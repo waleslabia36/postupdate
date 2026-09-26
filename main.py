@@ -127,6 +127,16 @@ class Config:
     # এবং সবচেয়ে ভালো কোয়ালিটির জন্য model=flux — এই তিনটি প্যারামিটার
     # প্রতিটি Pollinations.ai রিকোয়েস্টে যোগ করা হয় (generate_ai_image_bytes)।
     POLLINATIONS_EXTRA_PARAMS = "nologo=true&nofeed=true&model=flux"
+    # nologo=true সত্ত্বেও মাঝে মাঝে ছবির একদম নিচে ছোট "pollinations.ai"
+    # ওয়াটারমার্ক টেক্সট থেকে যায় — সেটা নিশ্চিতভাবে সরাতে ছবির নিচের এই
+    # কয়েক পিক্সেল ক্রপ করে ফেলা হয় (দেখুন _strip_pollinations_watermark)।
+    POLLINATIONS_WATERMARK_CROP_PX = 45
+
+    # ---- ফ্রেশনেস ফিল্টার — শুধুমাত্র "just now"/ব্রেকিং খবর পোস্ট করা হবে ----
+    # এর চেয়ে পুরনো কোনো RSS/Telegram আইটেম, অথবা বট চালু হওয়ার আগে পাবলিশ
+    # হওয়া যেকোনো আইটেম — দুটোই বাদ দেওয়া হয়, যাতে বট স্টার্টাপ/রিস্টার্টে
+    # পুরনো খবরের "backfill" স্প্যাম না হয় (দেখুন is_item_fresh)।
+    FRESH_WINDOW_SECONDS = 300  # ৫ মিনিট
 
     # ---- নিউজ সোর্স (RSS ফিড — সব ফ্রি, পাবলিক ও অত্যন্ত নির্ভরযোগ্য) ----
     RSS_FEEDS = [
@@ -142,7 +152,7 @@ class Config:
     # হিসেবে দেখায়, যেটা requests + BeautifulSoup দিয়ে সরাসরি পার্স করা যায়।
     ENABLE_TELEGRAM_SOURCE = True
     TELEGRAM_PREVIEW_BASE = "https://t.me/s/"
-    TELEGRAM_CHANNELS = ["WatcherGuru", "cointelegraph"]
+    TELEGRAM_CHANNELS = ["WatcherGuru", "cointelegraph", "tier10k", "WuBlockchain", "whale_alert_io"]
     # প্রতিটি চ্যানেল থেকে সর্বোচ্চ কতগুলো সাম্প্রতিক পোস্ট প্রতি সাইকেলে
     # বিবেচনা করা হবে।
     TELEGRAM_MAX_POSTS_PER_CHANNEL = 8
@@ -210,6 +220,13 @@ def validate_config():
 # ---------------------------------------------------------------------------
 # ডেটা মডেল — একটি নিউজ/টুইট আইটেমকে প্রতিনিধিত্ব করে
 # ---------------------------------------------------------------------------
+# বট চালু হওয়ার টাইমস্ট্যাম্প (UTC) — মডিউল লোড হওয়ার সাথে সাথেই সেট হয়ে
+# যায়। স্টার্টআপ/রিস্টার্টে RSS/Telegram এর পুরনো ("backfill") খবর যেন
+# ভুলবশত পোস্ট না হয়ে যায়, তার জন্য is_item_fresh() এই টাইমস্ট্যাম্পের
+# সাথে তুলনা করে।
+BOT_START_TIME = datetime.now(timezone.utc)
+
+
 @dataclass
 class NewsItem:
     source_name: str
@@ -218,7 +235,7 @@ class NewsItem:
     summary: str
     link: str
     images: List[str] = field(default_factory=list)
-    published: Optional[str] = None
+    published: Optional[datetime] = None
 
     @property
     def link_hash(self) -> str:
@@ -659,20 +676,82 @@ def parse_feed_safely(feed_url: str, timeout: int = None):
     return feedparser.parse(resp.content)
 
 
+def _parse_rss_published_dt(entry) -> Optional[datetime]:
+    """feedparser এন্ট্রি থেকে published/updated সময়কে timezone-aware UTC
+    datetime এ রূপান্তর করে। কোনো টাইমস্ট্যাম্প পার্স করা না গেলে None
+    রিটার্ন করে — is_item_fresh() তখন নিরাপদ থাকতে আইটেমটিকে fresh ধরে
+    না, যাতে টাইমস্ট্যাম্পহীন কোনো পুরনো আইটেম ভুলবশত পোস্ট না হয়ে যায়।"""
+    struct = entry.get("published_parsed") or entry.get("updated_parsed")
+    if not struct:
+        return None
+    try:
+        return datetime(*struct[:6], tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
+def _parse_telegram_message_dt(message_div) -> Optional[datetime]:
+    """একটি Telegram প্রিভিউ মেসেজের <a class="tgme_widget_message_date">
+    এর ভেতরের <time datetime="..."> অ্যাট্রিবিউট থেকে timezone-aware UTC
+    datetime বের করে। পার্স ব্যর্থ হলে None রিটার্ন করে।"""
+    time_tag = message_div.select_one("a.tgme_widget_message_date time")
+    if time_tag is None:
+        return None
+    raw = (time_tag.get("datetime") or "").strip()
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def is_item_fresh(published: Optional[datetime]) -> bool:
+    """একটি আইটেম সত্যিকারের "just now"/ব্রেকিং কিনা যাচাই করে।
+
+    কোনো পাবলিশড টাইমস্ট্যাম্পই পার্স করা না গেলে (None) নিরাপদ থাকতে সেটাকে
+    fresh ধরা হয় না — বরং বাদ দেওয়া হয়, যাতে টাইমস্ট্যাম্পহীন কোনো পুরনো
+    খবর ভুলবশত পোস্ট না হয়ে যায়।
+
+    ফ্রেশ কাটঅফ হলো: max(বট চালু হওয়ার সময়, এখন - FRESH_WINDOW_SECONDS)।
+    এভাবে বট সবেমাত্র চালু হলে (৫ মিনিটেরও কম আগে) শুধুই বট-চালু-হওয়ার-
+    পরে পাবলিশ হওয়া আইটেম আসবে (কোনো ব্যাকফিল স্প্যাম নেই), আর বট অনেকক্ষণ
+    ধরে চলতে থাকলে স্বাভাবিকভাবেই ৫ মিনিটের বেশি পুরনো আইটেম বাদ যাবে।"""
+    if published is None:
+        return False
+    now = datetime.now(timezone.utc)
+    cutoff = max(BOT_START_TIME, now - timedelta(seconds=Config.FRESH_WINDOW_SECONDS))
+    return published >= cutoff
+
+
 def fetch_rss_news() -> List[NewsItem]:
     """প্রাইমারি ও সবচেয়ে নির্ভরযোগ্য সোর্স — Cointelegraph, CoinDesk ও
     Decrypt এর অফিসিয়াল RSS ফিড থেকে সর্বশেষ খবরগুলো সংগ্রহ করে। কোনো একটা
     ফিড সাময়িকভাবে অকেজো থাকলে সেটা লগ করে বাকি ফিডগুলো থেকে সংগ্রহ চালিয়ে
-    যায় — একটার ব্যর্থতায় পুরো সাইকেল থামে না।"""
+    যায় — একটার ব্যর্থতায় পুরো সাইকেল থামে না।
+
+    প্রতিটি এন্ট্রির published/updated টাইমস্ট্যাম্প যাচাই করা হয়
+    (is_item_fresh) — বট চালু হওয়ার আগে পাবলিশ হওয়া বা ৫ মিনিটের বেশি
+    পুরনো যেকোনো এন্ট্রি সঙ্গে সঙ্গে বাদ দেওয়া হয়, যাতে পুরনো
+    খবরের "backfill" স্প্যাম না হয়।"""
     items: List[NewsItem] = []
     for feed_url in Config.RSS_FEEDS:
         try:
             parsed = parse_feed_safely(feed_url)
             source_name = parsed.feed.get("title", feed_url) if parsed.feed else feed_url
+            fresh_count = 0
+            stale_count = 0
             for entry in parsed.entries[:10]:
                 link = entry.get("link")
                 title = entry.get("title", "")
                 if not link or not title:
+                    continue
+                published_dt = _parse_rss_published_dt(entry)
+                if not is_item_fresh(published_dt):
+                    stale_count += 1
                     continue
                 summary = clean_html(entry.get("summary", "") or entry.get("description", ""))
                 items.append(
@@ -683,8 +762,14 @@ def fetch_rss_news() -> List[NewsItem]:
                         summary=summary[:600],
                         link=link,
                         images=extract_images_from_entry(entry),
-                        published=entry.get("published"),
+                        published=published_dt,
                     )
+                )
+                fresh_count += 1
+            if stale_count:
+                log.info(
+                    f"{source_name}: {fresh_count}টি ফ্রেশ + {stale_count}টি পুরনো "
+                    "(৫ মিনিটের বেশি আগের/বট-চালুর আগের) আইটেম বাদ দেওয়া হলো"
                 )
         except Exception as e:
             log.warning(f"RSS ফিড ফেচ করতে ব্যর্থ {feed_url}: {e}")
@@ -776,6 +861,8 @@ def fetch_telegram_news() -> List[NewsItem]:
 
             # পেইজের নিচের দিকের ব্লকগুলোই সবচেয়ে সাম্প্রতিক পোস্ট।
             recent_wraps = message_wraps[-Config.TELEGRAM_MAX_POSTS_PER_CHANNEL :]
+            fresh_count = 0
+            stale_count = 0
             for wrap in recent_wraps:
                 try:
                     text_div = wrap.select_one(".tgme_widget_message_text")
@@ -790,6 +877,11 @@ def fetch_telegram_news() -> List[NewsItem]:
                     if not link:
                         continue
 
+                    published_dt = _parse_telegram_message_dt(wrap)
+                    if not is_item_fresh(published_dt):
+                        stale_count += 1
+                        continue
+
                     images = _extract_telegram_message_image(wrap)
 
                     items.append(
@@ -800,13 +892,18 @@ def fetch_telegram_news() -> List[NewsItem]:
                             summary=text[:600],
                             link=link,
                             images=images,
+                            published=published_dt,
                         )
                     )
+                    fresh_count += 1
                 except Exception as e:
                     log.warning(f"@{channel} এর একটি মেসেজ পার্স করতে ব্যর্থ: {e}")
                     continue
 
-            log.info(f"@{channel} থেকে {len(recent_wraps)}টি সাম্প্রতিক Telegram পোস্ট পাওয়া গেছে")
+            log.info(
+                f"@{channel}: {len(recent_wraps)}টি পোস্ট চেক করে {fresh_count}টি ফ্রেশ "
+                f"পাওয়া গেছে ({stale_count}টি পুরনো/বট-চালুর আগের বাদ দেওয়া হলো)"
+            )
         except Exception as e:
             log.warning(f"@{channel} এর HTML পার্স করতে ব্যর্থ: {e}")
             continue
@@ -1073,11 +1170,41 @@ def generate_image_prompt(item: NewsItem) -> str:
     return f"futuristic 3d render of {item.title}, glowing crypto chart, dark background"
 
 
+def _strip_pollinations_watermark(image_bytes: bytes) -> bytes:
+    """Pollinations.ai কে nologo=true পাঠানো সত্ত্বেও মাঝে মাঝে ছবির একদম
+    নিচের কোণায় ছোট "pollinations.ai" ওয়াটারমার্ক টেক্সট রয়ে যায়। এটা
+    নিশ্চিতভাবে সরাতে ছবির নিচের কয়েক পিক্সেল (Config.
+    POLLINATIONS_WATERMARK_CROP_PX) সরাসরি ক্রপ করে ফেলা হয়, তারপর
+    Telegram এ পোস্ট করার সময় অনুপাত/সাইজ যেন স্বাভাবিক থাকে সেজন্য আবার
+    মূল উচ্চতায় resize করে PNG bytes হিসেবে ফেরত দেওয়া হয়। ছবির
+    bytes করাপ্ট/অপঠনযোগ্য হলে (Pillow দিয়ে ওপেন করতে ব্যর্থ হলে) এই
+    ফাংশন কখনো exception রেইজ করে না — বরং মূল bytes-ই অপরিবর্তিত ফেরত
+    দিয়ে দেয়, যাতে পুরো ছবি-জেনারেশন পাইপলাইন কখনো ক্র্যাশ না করে।"""
+    try:
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        width, height = img.size
+        crop_px = min(Config.POLLINATIONS_WATERMARK_CROP_PX, max(height // 4, 0))
+        if crop_px <= 0:
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            return buf.getvalue()
+        cropped = img.crop((0, 0, width, height - crop_px))
+        cropped = cropped.resize((width, height), Image.LANCZOS)
+        buf = io.BytesIO()
+        cropped.save(buf, format="PNG")
+        return buf.getvalue()
+    except Exception as e:
+        log.warning(f"Pollinations ওয়াটারমার্ক ক্রপ করতে ব্যর্থ, মূল ছবি ব্যবহার করা হচ্ছে: {e}")
+        return image_bytes
+
+
 def generate_ai_image_bytes(prompt: str) -> Optional[bytes]:
     """সম্পূর্ণ ফ্রি Pollinations.ai ব্যবহার করে ছবি তৈরি করে — কোনো API key,
-    সাইনআপ বা ক্রেডিট কার্ড লাগে না। ওয়াটারমার্ক/লোগো সম্পূর্ণভাবে সরাতে
-    nologo=true & nofeed=true, এবং সেরা কোয়ালিটির জন্য model=flux যোগ করা
-    হয়েছে (Config.POLLINATIONS_EXTRA_PARAMS)।"""
+    সাইনআপ বা ক্রেডিট কার্ড লাগে না। ওয়াটারমার্ক/লোগো সরাতে nologo=true &
+    nofeed=true, সেরা কোয়ালিটির জন্য model=flux (Config.
+    POLLINATIONS_EXTRA_PARAMS) যোগ করা হয়েছে, এবং তারপরও কোনো
+    ওয়াটারমার্ক অবশিষ্ট থাকলে সেটা _strip_pollinations_watermark দিয়ে
+    ছবির নিচের অংশ ক্রপ করে নিশ্চিতভাবে সরিয়ে ফেলা হয়।"""
     if not Config.ENABLE_AI_IMAGE:
         return None
     try:
@@ -1091,7 +1218,7 @@ def generate_ai_image_bytes(prompt: str) -> Optional[bytes]:
         resp = requests.get(image_url, timeout=90)
         resp.raise_for_status()
         if resp.headers.get("content-type", "").startswith("image"):
-            return resp.content
+            return _strip_pollinations_watermark(resp.content)
         log.warning("Pollinations.ai থেকে ছবি আসেনি (ভুল content-type)")
     except Exception as e:
         log.warning(f"Pollinations.ai ছবি তৈরিতে ব্যর্থ: {e}")
@@ -1108,11 +1235,15 @@ def tg_url(method: str) -> str:
     return TELEGRAM_API.format(token=Config.TELEGRAM_BOT_TOKEN, method=method)
 
 
-def build_caption(emoji: str, headline_bn: str, source_link: str, sentiment: str) -> str:
+def build_caption(
+    emoji: str, headline_bn: str, source_link: str, sentiment: str, source_type: str
+) -> str:
     """ক্যাপশন তৈরি করে — হেডলাইনের পরে, Source/Follow লিংকের আগে একটি
     সম্পূর্ণ ইংরেজি "MARKET HINT" লাইন যোগ করা হয়েছে, যা Gemini এর
     সেন্টিমেন্ট বিশ্লেষণ অনুযায়ী BULLISH 🟢 / BEARISH 🔴 / NEUTRAL ⚪
-    এর একটি দেখায়।"""
+    এর একটি দেখায়। "🌐 Source" লাইনটি শুধুমাত্র RSS সোর্সের আইটেমের জন্য
+    যোগ করা হয় — Telegram চ্যানেল থেকে আসা আইটেমে (source_type ==
+    "telegram") এই লাইন সম্পূর্ণভাবে বাদ দেওয়া হয়।"""
     sentiment = _sanitize_sentiment(sentiment)
     if sentiment == "BULLISH":
         sentiment_emoji = "🟢"
@@ -1120,16 +1251,22 @@ def build_caption(emoji: str, headline_bn: str, source_link: str, sentiment: str
         sentiment_emoji = "🔴"
     else:
         sentiment_emoji = "⚪"
-    return (
+
+    caption = (
         f"{emoji} <b>{headline_bn}</b>\n\n"
         f"📊 <b>MARKET HINT:</b> <b>{sentiment}</b> {sentiment_emoji}\n\n"
-        f'🌐 <b>Source:</b> <a href="{source_link}">Click Here</a>\n\n'
-        f'🔔 <b>Follow:</b> <a href="{Config.FOLLOW_CHANNEL_URL}"><b>CRYPTO BARTA</b></a>'
     )
+    if source_type != "telegram":
+        caption += f'🌐 <b>Source:</b> <a href="{source_link}">Click Here</a>\n\n'
+    caption += f'🔔 <b>Follow:</b> <a href="{Config.FOLLOW_CHANNEL_URL}"><b>CRYPTO BARTA</b></a>'
+    return caption
 
 
 def send_text_message(caption: str) -> bool:
-    """ছবি ছাড়া শুধু টেক্সট পোস্ট করে (যখন কোনো ছবিই পাওয়া যায়নি)।"""
+    """ছবি ছাড়া শুধু টেক্সট পোস্ট করে (যখন কোনো ছবিই পাওয়া যায়নি)।
+    disable_web_page_preview=true পাঠানো হয় যাতে ক্যাপশনের ভেতরের Source/
+    Follow লিংক থেকে Telegram স্বয়ংক্রিয়ভাবে কোনো webpage preview কার্ড
+    (নিচে অতিরিক্ত বক্স) দেখিয়ে না দেয় — মেসেজটা পরিষ্কার/ক্লিন থাকে।"""
     try:
         resp = requests.post(
             tg_url("sendMessage"),
@@ -1137,6 +1274,7 @@ def send_text_message(caption: str) -> bool:
                 "chat_id": Config.TELEGRAM_CHANNEL_ID,
                 "text": caption,
                 "parse_mode": "HTML",
+                "disable_web_page_preview": "true",
             },
             timeout=30,
         )
@@ -1174,7 +1312,7 @@ def post_news_item(item: NewsItem, emoji: str, headline_bn: str, sentiment: str)
     """সবসময় সর্বোচ্চ ১টি ছবি পাঠায় (কখনো অ্যালবাম/sendMediaGroup নয়):
     সোর্সে ছবি থাকলে প্রথম ইউনিক ছবিটি -> ছবি না থাকলে Pollinations.ai দিয়ে
     ১টি AI ছবি বানিয়ে পাঠানো -> সব ব্যর্থ হলে শুধু টেক্সট।"""
-    caption = build_caption(emoji, headline_bn, item.link, sentiment)
+    caption = build_caption(emoji, headline_bn, item.link, sentiment, item.source_type)
     raw_images = [u for u in item.images if u and u.startswith("http")]
     valid_images = dedupe_image_urls(raw_images)
 
