@@ -122,10 +122,12 @@ cap = main.build_news_caption("বিটকয়েন $১০০k ছুঁল
 check("HEADLINE বোল্ড", "<b>বিটকয়েন $১০০k ছুঁলো</b>" in cap)
 check("MARKET HINT 🟢", "📊 <b>MARKET HINT:</b> <b>BULLISH</b> 🟢" in cap)
 check("RSS-এ Source লাইন আছে", '🌐 <b>Source:</b> <a href="https://example.com/a">Click Here</a>' in cap)
-check("শেষ লাইন CRYPTO UPDATE → tmcryptoupdate",
-      '🔔 <b><a href="https://t.me/tmcryptoupdate">CRYPTO UPDATE</a></b>' in cap)
-check("পুরনো 'Follow:' / cryptobartalove1 নেই",
+check("শেষ লাইন: এক লাইনে Follow CRYPTO UPDATE → tmcryptoupdate",
+      '🔔 <b><a href="https://t.me/tmcryptoupdate">Follow CRYPTO UPDATE</a></b>' in cap)
+check("পুরনো 'Follow:' (কোলনসহ) ও cryptobartalove1 নেই",
       "Follow:" not in cap and "cryptobartalove1" not in cap)
+check("Follow আর CRYPTO UPDATE একই লাইনে (একই <a> ট্যাগে)",
+      ">Follow CRYPTO UPDATE</a>" in cap)
 tg_item = main.NewsItem(source_name="WatcherGuru", source_type="telegram",
                         title="t", summary="s", link="https://t.me/w/1",
                         published=datetime.now(timezone.utc))
