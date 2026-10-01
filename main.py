@@ -47,6 +47,7 @@ import hashlib
 import logging
 import sqlite3
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from html import escape as html_escape          # HTML ক্যাপশনে বিশেষ চিহ্ন এস্কেপ করার জন্য
 from urllib.parse import quote as url_quote     # Pollinations AI ছবির URL বানানোর জন্য
 from dataclasses import dataclass, field
@@ -128,11 +129,30 @@ class Config:
     # ৫ মিনিটের বেশি পুরনো কোনো আইটেম পোস্ট হবে না
     FRESH_WINDOW_SECONDS = 300
 
-    # ---- RSS ফিড সোর্স ----
+    # ---- RSS ফিড সোর্স (সবই সম্পূর্ণ ফ্রি, কোনো API key লাগে না) ----
+    # প্রথম ৩টা = মূল ফিড; তারপরেরগুলো কভারেজ বাড়াতে যোগ (২০২৬-১০-০১ লাইভ যাচাই করে
+    # যা যা কাজ করছিল শুধু তা) — CoinGape বাদ দেওয়া হয়েছে (403 দিচ্ছিল)।
     RSS_FEEDS = [
+        # মূল তিনটা
         "https://cointelegraph.com/rss",
         "https://www.coindesk.com/arc/outboundfeeds/rss/",
         "https://decrypt.co/feed",
+        # অতিরিক্ত জনপ্রিয় ক্রিপ্টো-নিউজ ফিড
+        "https://www.theblock.co/rss.xml",       # The Block — ETF ফ্লো, মার্কেট, নীতি
+        "https://beincrypto.com/feed/",          # BeInCrypto — বিশ্বজুড়ে রেগুলেশন/নেতাদের বক্তব্য
+        "https://www.newsbtc.com/feed/",         # NewsBTC — মার্কেট, লিকুইডেশন, ইটিএফ
+        "https://cryptoslate.com/feed/",         # CryptoSlate
+        "https://bitcoinmagazine.com/feed",      # Bitcoin Magazine
+        "https://u.today/rss",                   # U.Today
+        "https://cryptobriefing.com/feed/",      # Crypto Briefing
+        # Google News RSS (ফ্রি, কী লাগে না) — বিষয়ভিত্তিক সার্চ দিয়ে সব
+        # মাধ্যমের খবর আসে: ট্রাম্পসহ যে কেউ ক্রিপ্টো নিয়ে বললে, ETF ডাটা,
+        # লিকুইডেশন, রেগুলেশন, ফেড/অর্থনীতি — সব ধরনের হেডলাইন ধরা পড়ে
+        "https://news.google.com/rss/search?q=Trump+crypto&hl=en-US&gl=US&ceid=US:en",
+        "https://news.google.com/rss/search?q=bitcoin+ETF&hl=en-US&gl=US&ceid=US:en",
+        "https://news.google.com/rss/search?q=crypto+liquidation&hl=en-US&gl=US&ceid=US:en",
+        "https://news.google.com/rss/search?q=cryptocurrency+regulation&hl=en-US&gl=US&ceid=US:en",
+        "https://news.google.com/rss/search?q=crypto+market+Federal+Reserve&hl=en-US&gl=US&ceid=US:en",
     ]
 
     # ---- পাবলিক Telegram চ্যানেল স্ক্র্যাপিং ----
@@ -442,10 +462,11 @@ def send_text_message(text: str, parse_mode: str = "HTML") -> bool:
 
 def send_single_photo(image_url: str = None, photo_bytes: bytes = None,
                       caption: str = "", parse_mode: str = "HTML",
-                      filename: str = "photo.png") -> bool:
+                      filename: str = "photo.png",
+                      content_type: str = "image/png") -> bool:
     """সবসময় মাত্র ১টা ছবি পাঠায় — কখনো sendMediaGroup/অ্যালবাম নয়।
     image_url থাকলে Telegram নিজে ওই URL থেকে ছবি নেয় (সোর্সের ছবি);
-    photo_bytes থাকলে আপলোড করা হয় (AI ছবি বা প্রাইস কার্ড)।"""
+    photo_bytes থাকলে আপলোড করা হয় (ডাউনলোড করা সোর্স ছবি, AI ছবি বা প্রাইস কার্ড)।"""
     data = {
         "chat_id": TELEGRAM_CHANNEL_ID,
         "parse_mode": parse_mode,
@@ -456,7 +477,7 @@ def send_single_photo(image_url: str = None, photo_bytes: bytes = None,
     if image_url:
         data["photo"] = image_url
     elif photo_bytes:
-        files = {"photo": (filename, photo_bytes, "image/png")}
+        files = {"photo": (filename, photo_bytes, content_type)}
     else:
         return False
     return _telegram_api("sendPhoto", data=data, files=files)
@@ -513,40 +534,122 @@ def _entry_images(entry) -> List[str]:
     return urls
 
 
-def fetch_rss_items() -> List[NewsItem]:
-    """Config.RSS_FEEDS-এর প্রতিটা ফিড পার্স করে NewsItem লিস্ট ফেরত দেয়।
-    কোনো ফিড ফেচ/পার্স ব্যর্থ হলে শুধু লগ করে পরের ফিডে চলে যায় (পুরো সাইকেল আটকায় না)।"""
+def _resolve_google_news_url(gn_link: str) -> Optional[str]:
+    """Google News রিডাইরেক্ট লিংক থেকে আসল পাবলিশারের URL বের করে।
+    পদ্ধতি (সম্পূর্ণ ফ্রি, বাইরের কোনো সার্ভিস ছাড়া):
+      ১) GN আর্টিকেল পেজ থেকে সিগনেচার (data-n-a-sg) ও টাইমস্ট্যাম্প (data-n-a-ts)
+      ২) news.google.com-এর নিজস্ব batchexecute এন্ডপয়েন্টে POST → আসল URL
+    সুফল: "Source: Click Here" সরাসরি নিউজ সাইটে যায় (JS ছাড়াও খোলে) এবং
+    ওরিজিনাল ফিডের সাথে একই লিংক হওয়ায় লিংক-হ্যাশ ডুপ্লিকেট চেকও পাক্কা ধরে।
+    ব্যর্থ হলে None — কলার মূল GN লিংকই রাখবে (সেটাও ব্রাউজারে খোলে)।"""
+    try:
+        # ধাপ ১: আর্টিকেল পেজ থেকে সিগনেচার/টাইমস্ট্যাম্প
+        page = requests.get(gn_link, timeout=10, headers=HTTP_HEADERS)
+        page.raise_for_status()
+        sg = re.search(r'data-n-a-sg="([^"]+)"', page.text)
+        ts = re.search(r'data-n-a-ts="([^"]+)"', page.text)
+        m_id = re.search(r"/articles/([A-Za-z0-9_\-]+)", gn_link)
+        if not (sg and ts and m_id):
+            return None
+
+        # ধাপ ২: batchexecute কল
+        inner = json.dumps([
+            "garturlreq",
+            [["X", "X", ["X", "X"], None, None, 1, 1, "US:en", None, 1,
+              None, None, None, None, None, 0, 1],
+             "X", "X", 1, [1, 1, 1], 1, 1, None, 0, 0, None, 0],
+            m_id.group(1), int(ts.group(1)), sg.group(1),
+        ])
+        freq = json.dumps([[["Fbv4je", inner, None, "generic"]]])
+        resp = requests.post(
+            "https://news.google.com/_/DotsSplashUi/data/batchexecute",
+            headers={
+                **HTTP_HEADERS,
+                "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+            },
+            data={"f.req": freq},
+            timeout=10,
+        )
+        resp.raise_for_status()
+
+        # রেসপন্সে ["garturlres","<আসল URL>",1] থাকে (JSON-escaped)
+        m = re.search(r'garturlres\\+",\\+"(.*?)\\+",1', resp.text, re.S)
+        if not m:
+            return None
+        raw = m.group(1).replace('\\"', '"').replace("\\\\", "\\")
+        raw = re.sub(r'\\u([0-9a-fA-F]{4})',
+                     lambda x: chr(int(x.group(1), 16)), raw)
+        if raw.startswith("http") and "news.google.com" not in raw:
+            return raw
+        return None
+    except Exception as e:
+        log.debug("GN লিংক ডিকোড ব্যর্থ: %s", e)
+        return None
+
+
+def _fetch_single_rss(feed_url: str) -> List[NewsItem]:
+    """একটি মাত্র RSS ফিড ফেচ ও পার্স করে NewsItem লিস্ট দেয়।
+    কোনো ফিড ফেচ/পার্স ব্যর্থ হলে শুধু লগ করে খালি লিস্ট ফেরত — পরের
+    ফিড চলতেই থাকে (parallel কলে এক ফিডের সমস্যা বাকিদের ছুঁয়ে যায় না)।"""
     items: List[NewsItem] = []
     timeout = Config.FEED_FETCH_TIMEOUT_SECONDS
-    for feed_url in Config.RSS_FEEDS:
-        try:
-            resp = requests.get(feed_url, timeout=timeout, headers=HTTP_HEADERS)
-            resp.raise_for_status()
-            parsed = feedparser.parse(resp.content)
-        except Exception as e:
-            log.warning("RSS ফেচ ব্যর্থ (%s): %s", feed_url, e)
-            continue
+    try:
+        resp = requests.get(feed_url, timeout=timeout, headers=HTTP_HEADERS)
+        resp.raise_for_status()
+        parsed = feedparser.parse(resp.content)
+    except Exception as e:
+        log.warning("RSS ফেচ ব্যর্থ (%s): %s", feed_url, e)
+        return []
 
-        source_name = urlparse_netloc(feed_url)
-        for entry in parsed.entries[:30]:   # ফিডের সাম্প্রতিক ~৩০টা এন্ট্রি যথেষ্ট
+    source_name = urlparse_netloc(feed_url)
+    for entry in parsed.entries[:30]:   # ফিডের সাম্প্রতিক ~৩০টা এন্ট্রি যথেষ্ট
+        try:
+            title = (entry.get("title") or "").strip()
+            link = (entry.get("link") or "").strip()
+            if not title or not link:
+                continue
+            item = NewsItem(
+                source_name=source_name,
+                source_type="rss",
+                title=title,
+                summary=_clean_html_to_text(entry.get("summary", "")),
+                link=link,
+                images=_entry_images(entry),
+                published=_entry_published(entry),
+            )
+            # Google News লিংক হলে (শুধুমাত্র FRESH আইটেমের জন্য — খরচ কমে)
+            # আসল পাবলিশার URL-এ রূপান্তর: ক্লিকে সরাসরি নিউজ সাইটে যায়,
+            # সোর্সের নামও আসল হয়, আর ওরিজিনাল ফিডের সাথে একই লিংক হওয়ায়
+            # ডুপ্লিকেট চেক পাক্কা ধরে। ডিকোড ব্যর্থ হলে মূল GN লিংকই থাকে।
+            if "news.google.com" in item.link and is_item_fresh(item):
+                real_url = _resolve_google_news_url(item.link)
+                if real_url:
+                    item.link = real_url
+                    item.source_name = urlparse_netloc(real_url)
+            items.append(item)
+        except Exception as e:
+            # একটা খারাপ এন্ট্রি পুরো ফিডকে আটকাবে না
+            log.warning("RSS এন্ট্রি পার্স ব্যর্থ (%s): %s", feed_url, e)
+    return items
+
+
+def fetch_rss_items() -> List[NewsItem]:
+    """Config.RSS_FEEDS-এর সব ফিড **একসাথে (ThreadPool)** পার্স করে ফেরত দেয়।
+    ফিড সংখ্যা বেড়ে যাওয়ায় সিরিয়াল ফেচ সাইকেলকে ধীর করত — parallel হলে
+    ১৫টা ফিডও কয়েক সেকেন্ডে শেষ; ফল এলোমেলো ক্রমে আসে, run_cycle-এ সময়
+    অনুযায়ী সাজানো হয়।"""
+    feeds = Config.RSS_FEEDS
+    items: List[NewsItem] = []
+    if not feeds:
+        return items
+    with ThreadPoolExecutor(max_workers=min(6, len(feeds))) as pool:
+        futures = [pool.submit(_fetch_single_rss, u) for u in feeds]
+        for fut in as_completed(futures):
             try:
-                title = (entry.get("title") or "").strip()
-                link = (entry.get("link") or "").strip()
-                if not title or not link:
-                    continue
-                items.append(NewsItem(
-                    source_name=source_name,
-                    source_type="rss",
-                    title=title,
-                    summary=_clean_html_to_text(entry.get("summary", "")),
-                    link=link,
-                    images=_entry_images(entry),
-                    published=_entry_published(entry),
-                ))
+                items.extend(fut.result())
             except Exception as e:
-                # একটা খারাপ এন্ট্রি পুরো ফিডকে আটকাবে না
-                log.warning("RSS এন্ট্রি পার্স ব্যর্থ (%s): %s", feed_url, e)
-    log.info("RSS: %dটা আইটেম পাওয়া গেছে", len(items))
+                log.warning("RSS থ্রেড ব্যর্থ: %s", e)
+    log.info("RSS: %dটা আইটেম পাওয়া গেছে (%dটা ফিড)", len(items), len(feeds))
     return items
 
 
@@ -568,74 +671,89 @@ def urlparse_netloc(url: str) -> str:
 # পারে — তখন CSS সিলেক্টরগুলো (.tgme_widget_message-text/photo_wrap ইত্যাদি)
 # আপডেট করে এখানে আবার মেলাতে হবে। কোড বদলালে সিলেক্টরও মিলিয়ে নিন।
 # =============================================================================
+def _fetch_single_channel(channel: str) -> List[NewsItem]:
+    """একটি মাত্র Telegram চ্যানেলের প্রিভিউ পেজ স্ক্র্যাপ করে।
+    ব্যর্থ হলে খালি লিস্ট — বাকি চ্যানেল চলতে থাকে।"""
+    page_url = f"{Config.TELEGRAM_PREVIEW_BASE}{channel}"
+    items: List[NewsItem] = []
+    timeout = Config.FEED_FETCH_TIMEOUT_SECONDS
+    try:
+        resp = requests.get(page_url, timeout=timeout, headers=HTTP_HEADERS)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        blocks = soup.select("div.tgme_widget_message")
+        # পাতায় পোস্ট কালানুক্রমিকভাবে থাকে (শেষেই সব নতুন) — তাই শেষ N টা নেওয়া হয়;
+        # এভাবে উপরের পিনড/পুরনো পোস্টও স্বয়ংক্রিয়ভাবে বাদ পড়ে
+        recent = blocks[-Config.TELEGRAM_MAX_POSTS_PER_CHANNEL:]
+
+        for block in recent:
+            text_el = block.select_one(".tgme_widget_message_text")
+            if text_el is None:
+                continue   # শুধু ছবি/ভিডিও পোস্ট — টেক্সট নেই, বাদ
+            text = text_el.get_text(" ", strip=True)
+            if not text:
+                continue
+
+            # পোস্টের পারমানেন্ট লিংক: data-post="channel/123"
+            data_post = block.get("data-post")
+            link = f"https://t.me/{data_post}" if data_post else page_url
+
+            # ছবি: .tgme_widget_message_photo_wrap এর inline style থেকে
+            # background-image: url(...) — না পেলে খালি লিস্ট
+            images: List[str] = []
+            photo_wrap = block.select_one(".tgme_widget_message_photo_wrap")
+            if photo_wrap is not None:
+                style = photo_wrap.get("style") or ""
+                m = re.search(r"background-image:\s*url\(['\"]?(.*?)['\"]?\)", style)
+                if m:
+                    images.append(m.group(1))
+
+            # প্রকাশ সময়: <time datetime="..."> — না থাকলে এখন
+            published = datetime.now(timezone.utc)
+            time_el = block.select_one("time[datetime]")
+            if time_el is not None:
+                try:
+                    published = datetime.fromisoformat(
+                        time_el.get("datetime").replace("Z", "+00:00")
+                    )
+                    if published.tzinfo is None:
+                        published = published.replace(tzinfo=timezone.utc)
+                except Exception:
+                    pass
+
+            items.append(NewsItem(
+                source_name=channel,
+                source_type="telegram",
+                title=text[:300],
+                summary=text[:1500],
+                link=link,
+                images=images,
+                published=published,
+            ))
+    except Exception as e:
+        log.warning("Telegram চ্যানেল ফেচ ব্যর্থ (%s): %s", channel, e)
+    return items
+
+
 def fetch_telegram_items() -> List[NewsItem]:
-    """সব Telegram চ্যানেলের প্রিভিউ পেজ থেকে সাম্প্রতিক পোস্ট সংগ্রহ করে।
-    একটা চ্যানেল ফেল হলে গ্রেসফুলি স্কিপ করে পরের চ্যানেলে যায়।"""
+    """সব Telegram চ্যানেল **একসাথে (ThreadPool)** স্ক্র্যাপ করে সাম্প্রতিক
+    পোস্ট সংগ্রহ করে। একটা চ্যানেল ফেল হলে গ্রেসফুলি স্কিপ।"""
     if not Config.ENABLE_TELEGRAM_SOURCE:
         return []
 
+    channels = Config.TELEGRAM_CHANNELS
     items: List[NewsItem] = []
-    timeout = Config.FEED_FETCH_TIMEOUT_SECONDS
-    for channel in Config.TELEGRAM_CHANNELS:
-        page_url = f"{Config.TELEGRAM_PREVIEW_BASE}{channel}"
-        try:
-            resp = requests.get(page_url, timeout=timeout, headers=HTTP_HEADERS)
-            resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, "html.parser")
-            blocks = soup.select("div.tgme_widget_message")
-            # পাতায় পোস্ট কালানুক্রমিকভাবে থাকে (শেষেই সব নতুন) — তাই শেষ N টা নেওয়া হয়;
-            # এভাবে উপরের পিনড/পুরনো পোস্টও স্বয়ংক্রিয়ভাবে বাদ পড়ে
-            recent = blocks[-Config.TELEGRAM_MAX_POSTS_PER_CHANNEL:]
-
-            for block in recent:
-                text_el = block.select_one(".tgme_widget_message_text")
-                if text_el is None:
-                    continue   # শুধু ছবি/ভিডিও পোস্ট — টেক্সট নেই, বাদ
-                text = text_el.get_text(" ", strip=True)
-                if not text:
-                    continue
-
-                # পোস্টের পারমানেন্ট লিংক: data-post="channel/123"
-                data_post = block.get("data-post")
-                link = f"https://t.me/{data_post}" if data_post else page_url
-
-                # ছবি: .tgme_widget_message_photo_wrap এর inline style থেকে
-                # background-image: url(...) — নামন্য থাকলে খালি লিস্ট
-                images: List[str] = []
-                photo_wrap = block.select_one(".tgme_widget_message_photo_wrap")
-                if photo_wrap is not None:
-                    style = photo_wrap.get("style") or ""
-                    m = re.search(r"background-image:\s*url\(['\"]?(.*?)['\"]?\)", style)
-                    if m:
-                        images.append(m.group(1))
-
-                # প্রকাশ সময়: <time datetime="..."> — না থাকলে এখন
-                published = datetime.now(timezone.utc)
-                time_el = block.select_one("time[datetime]")
-                if time_el is not None:
-                    try:
-                        published = datetime.fromisoformat(
-                            time_el.get("datetime").replace("Z", "+00:00")
-                        )
-                        if published.tzinfo is None:
-                            published = published.replace(tzinfo=timezone.utc)
-                    except Exception:
-                        pass
-
-                items.append(NewsItem(
-                    source_name=channel,
-                    source_type="telegram",
-                    title=text[:300],
-                    summary=text[:1500],
-                    link=link,
-                    images=images,
-                    published=published,
-                ))
-        except Exception as e:
-            log.warning("Telegram চ্যানেল ফেচ ব্যর্থ (%s): %s", channel, e)
-            continue
-
-    log.info("Telegram: %dটা আইটেম পাওয়া গেছে", len(items))
+    if not channels:
+        return items
+    with ThreadPoolExecutor(max_workers=min(5, len(channels))) as pool:
+        futures = [pool.submit(_fetch_single_channel, c) for c in channels]
+        for fut in as_completed(futures):
+            try:
+                items.extend(fut.result())
+            except Exception as e:
+                log.warning("Telegram থ্রেড ব্যর্থ: %s", e)
+    log.info("Telegram: %dটা আইটেম পাওয়া গেছে (%dটা চ্যানেল)",
+             len(items), len(channels))
     return items
 
 
@@ -921,7 +1039,7 @@ def generate_ai_image_bytes(item: NewsItem, headline: str) -> Optional[bytes]:
 #   {emoji} <b>{headline_bn}</b>
 #   📊 MARKET HINT: {sentiment} {sentiment_emoji}
 #   🌐 Source: Click Here        ← শুধু RSS আইটেমের জন্য
-#   🔔 CRYPTO UPDATE             ← FOLLOW_CHANNEL_URL এ লিংক (ফলো শব্দ নেই)
+#   🔔 Follow CRYPTO UPDATE     ← এক লাইনে, পুরোটাই FOLLOW_CHANNEL_URL এ লিংক
 # =============================================================================
 def build_news_caption(headline: str, sentiment: str, emoji: str,
                        item: NewsItem) -> str:
@@ -940,10 +1058,10 @@ def build_news_caption(headline: str, sentiment: str, emoji: str,
     if item.source_type == "rss":
         lines += ["", f'🌐 <b>Source:</b> <a href="{html_escape(item.link)}">'
                        f'Click Here</a>']
-    # শেষ লাইন: "Follow:" শব্দ ছাড়া শুধু CRYPTO UPDATE — ক্লিক করলে
-    # FOLLOW_CHANNEL_URL (https://t.me/tmcryptoupdate) এ যায়
+    # শেষ লাইন: "Follow CRYPTO UPDATE" — দুই শব্দ এক লাইনে, পুরোটাই ক্লিকেবল;
+    # ক্লিক করলে FOLLOW_CHANNEL_URL (https://t.me/tmcryptoupdate) এ যাবে
     lines += ["", f'🔔 <b><a href="{html_escape(Config.FOLLOW_CHANNEL_URL)}">'
-                   f'CRYPTO UPDATE</a></b>']
+                   f'Follow CRYPTO UPDATE</a></b>']
     return "\n".join(lines)
 
 
@@ -964,18 +1082,50 @@ def dedupe_urls(urls: List[str]) -> List[str]:
 #   ২) না থাকলে/ব্যর্থ হলে AI ছবি (Pollinations + ওয়াটারমার্ক ক্রপ)
 #   ৩) দুটোই ব্যর্থ হলে শুধু টেক্সট
 # =============================================================================
+def _download_image_bytes(url: str) -> Optional[Tuple[bytes, str, str]]:
+    """সোর্সের ছবি URL নিজে ডাউনলোড করে (JPEG bytes, mime, ফাইলনেম) দেয়।
+    Telegram নিজে URL থেকে আনতে না পারলে (hotlink/CDN সমস্যা — লগে
+    'failed to get HTTP URL content') এই পথে আমরা নিজে আনি; বেশিরভাগ
+    ক্ষেত্রে তখনও সোর্স ছবিই যায়, AI ছবির চেয়ে বাস্তবনিষ্ঠ। ব্যর্থ হলে None।"""
+    try:
+        r = requests.get(url, timeout=20, headers=HTTP_HEADERS)
+        r.raise_for_status()
+        img = Image.open(io.BytesIO(r.content))
+        img.load()                      # ভাঙা/ভুল ফাইল হলে এখানেই এক্সেপশন
+        if max(img.size) > 2048:        # খুব বড় হলে সীমিত — দ্রুত আপলোড + লিমিট
+            img.thumbnail((2048, 2048))
+        img = img.convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=88)   # ছোট ফাইল, mime স্পষ্ট
+        return buf.getvalue(), "image/jpeg", "source.jpg"
+    except Exception as e:
+        log.debug("সোর্স ছবি ডাউনলোড ব্যর্থ (%s): %s", url, e)
+        return None
+
+
 def post_news_item(item: NewsItem, headline: str, sentiment: str,
                    emoji: str) -> bool:
-    """ক্যাপশন বানিয়ে ছবি/টেক্সট পাথে চ্যানেলে পোস্ট করে সফল হলে True।"""
+    """ক্যাপশন বানিয়ে ছবি/টেক্সট পাথে চ্যানেলে পোস্ট করে সফল হলে True।
+    ধাপ: ① সোর্সের প্রথম ছবি URL দিয়ে → ② সেটা ফেল হলে ছবিটা ডাউনলোড করে
+    আপলোড → ③ AI ছবি → ④ শুধু টেক্সট।"""
     caption = build_news_caption(headline, sentiment, emoji, item)
 
     # ১) সোর্সের নিজস্ব ছবি (সর্বোচ্চ ১টা, dedupe করা URL থেকে)
     source_images = dedupe_urls(item.images)
     if source_images:
-        if send_single_photo(image_url=source_images[0], caption=caption,
+        img_url = source_images[0]
+        if send_single_photo(image_url=img_url, caption=caption,
                              parse_mode="HTML"):
             return True
-        log.warning("সোর্স ছবি পাঠানো যায়নি — AI ছবির দিকে যাচ্ছি")
+        log.warning("সোর্স ছবি URL দিয়ে পাঠানো যায়নি — ডাউনলোড করে আপলোডের চেষ্টা")
+        downloaded = _download_image_bytes(img_url)
+        if downloaded:
+            img_bytes, img_mime, img_name = downloaded
+            if send_single_photo(photo_bytes=img_bytes, filename=img_name,
+                                 content_type=img_mime, caption=caption,
+                                 parse_mode="HTML"):
+                return True
+        log.warning("সোর্স ছবি ব্যর্থ — AI ছবির দিকে যাচ্ছি")
 
     # ২) AI ছবি
     if Config.ENABLE_AI_IMAGE:
@@ -1043,6 +1193,12 @@ def run_cycle(conn) -> None:
 
     # ফ্রেশনেস ফিল্টার — ৫ মিনিটের বেশি পুরনো বা বট স্টার্টের আগের সব বাদ
     fresh_items = [it for it in items if is_item_fresh(it)]
+    # parallel ফেচে ফল এলোমেলো ক্রমে আসে + ব্রেকিং খবর আগে যাওয়া ভালো —
+    # তাই নতুন থেকে পুরনো দিকে সাজিয়ে প্রসেস করা হয়
+    fresh_items.sort(
+        key=lambda it: it.published or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
     log.info("মোট %d / fresh %d আইটেম", len(items), len(fresh_items))
 
     processed = 0
