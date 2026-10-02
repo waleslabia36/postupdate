@@ -2455,6 +2455,7 @@ def econ_event_loop() -> None:
 # =============================================================================
 def main() -> None:
     """Validate config, initialize SQLite, then run price/news/event workers."""
+    log.info("Worker entrypoint reached; validating required environment variables")
     validate_config()
     conn = get_db()
     conn.execute(
@@ -2489,3 +2490,7 @@ def main() -> None:
             log.exception("News cycle ব্যর্থ — পরের cycle-এ চালু থাকবে: %s", e)
         elapsed = time.time() - cycle_start
         time.sleep(max(5.0, Config.POLL_INTERVAL_SECONDS - elapsed))
+
+
+if __name__ == "__main__":
+    main()
