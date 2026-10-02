@@ -244,6 +244,24 @@ class Config:
     PRICE_CARD_WIDTH = 1000
     PRICE_CARD_HEIGHT = 340
 
+    # ---- ইকোনমিক ক্যালেন্ডার (হাই-ইমপ্যাক্ট ইভেন্ট অ্যালার্ট) ----
+    # NFP/FOMC/CPI-টাইপ ইভেন্ট যা ক্রিপ্টো মার্কেটে সাথে সাথে ইমপ্যাক্ট ফেলে:
+    # ১ ঘণ্টা আগে বাংলা বিশ্লেষণসহ অ্যালার্ট (নন-সাইলেন্ট + অটো-পিন),
+    # ৩০ মিনিট আগে ছোট রিমাইন্ডার (ফুল নিউজ দ্বিতীয়বার নয়),
+    # ইভেন্টের ~৫ মিনিট পর BTC/ETH রিঅ্যাকশন অ্যানালাইসিস + আনপিন।
+    ENABLE_ECON_CALENDAR = True
+    # Forex Factory-র ফ্রি সাপ্তাহিক ক্যালেন্ডার JSON (কোনো API key লাগে না)
+    FF_CALENDAR_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
+    ECON_IMPACTS = {"High"}                 # শুধু হাই-ইমপ্যাক্ট ইভেন্ট
+    ECON_CURRENCIES = {"USD", "EUR"}        # NFP/FOMC/CPI টাইপ ইভেন্ট
+    ECON_T60_MINUTES = 60                   # ১ ঘণ্টা আগে প্রথম অ্যালার্ট + পিন
+    ECON_T30_MINUTES = 30                   # ৩০ মিনিট আগে রিমাইন্ডার
+    ECON_RESULT_DELAY_MINUTES = 5           # ইভেন্টের কত মিনিট পরে রেজাল্ট অ্যানালাইসিস
+    ECON_RESULT_WINDOW_HOURS = 3            # ইভেন্টের পর কত ঘণ্টা পর্যন্ত রেজাল্ট পাঠানো যাবে
+    ECON_CHECK_SECONDS = 60                 # ক্যালেন্ডার চেকের ব্যবধান (সেকেন্ড)
+    ECON_CACHE_TTL_SECONDS = 900            # ক্যালেন্ডার JSON ক্যাশ (১৫ মিনিট)
+    DHAKA_OFFSET_HOURS = 6                  # বাংলাদেশ সময় = UTC+6
+
 
 # =============================================================================
 # অতিরিক্ত হার্ডকোড ম্যাপিং (Config-এর পাশাপাশি ছোট কনস্ট্যান্ট)
@@ -409,6 +427,21 @@ def _init_schema(conn) -> None:
             alerted_at TEXT NOT NULL,
             PRIMARY KEY (symbol, milestone)
         );
+
+        CREATE TABLE IF NOT EXISTS econ_events (
+            event_id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            country TEXT,
+            event_time TEXT NOT NULL,
+            forecast TEXT,
+            previous TEXT,
+            t60_sent INTEGER NOT NULL DEFAULT 0,
+            t30_sent INTEGER NOT NULL DEFAULT 0,
+            result_sent INTEGER NOT NULL DEFAULT 0,
+            pinned_message_id INTEGER,
+            pre_btc REAL,
+            pre_eth REAL
+        );
         """
     )
     # শিরোনাম-ভিত্তিক ডুপ্লিকেট চেকের জন্য অতিরিক্ত কলাম (পুরনো DB-তেও
@@ -503,6 +536,65 @@ def send_text_message(text: str, parse_mode: str = "HTML") -> bool:
         "parse_mode": parse_mode,
         "disable_web_page_preview": "true",
     })
+
+
+def _telegram_api_raw(method: str, data: dict = None, files: dict = None,
+                      timeout: int = 60) -> Optional[dict]:
+    """Bot API কল করে সফল হলে 'result' ডিক্ট (message_id সহ) রিটার্ন করে।
+    ব্যর্থ হলে None — _telegram_api-র মতোই গ্রেসফুল।"""
+    if not TELEGRAM_BOT_TOKEN:
+        log.error("TELEGRAM_BOT_TOKEN খালি — পাঠানো সম্ভব নয়")
+        return None
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/{method}"
+    try:
+        resp = requests.post(url, data=data, files=files, timeout=timeout)
+        payload = resp.json()
+        if not payload.get("ok"):
+            log.warning("Telegram %s ব্যর্থ: %s", method, payload.get("description"))
+            return None
+        result = payload.get("result")
+        return result if isinstance(result, dict) else {}
+    except Exception as e:
+        log.warning("Telegram %s এ সমস্যা: %s", method, e)
+        return None
+
+
+def send_text_message_notify(text: str) -> Optional[int]:
+    """নন-সাইলেন্ট টেক্সট মেসেজ পাঠায়; সফল হলে message_id রিটার্ন করে
+    (পিন করার জন্য দরকার)।
+
+    ⚠️ নোট: চ্যানেল মিউট থাকলে বা ফোন সাইলেন্ট থাকলে Bot API দিয়ে জোর করে
+    নোটিফিকেশন/সাউন্ড পাঠানো সম্ভব না — এটা টেলিগ্রামের নিজস্ব সীমাবদ্ধতা,
+    কোনো বটই এটা ওভাররাইড করতে পারে না। disable_notification=false রাখায়
+    যাদের নোটিফিকেশন চালু আছে তারা সাউন্ডসহ পাবে; পিন করা মেসেজ মিউট
+    ইউজাররাও চ্যানেলে ঢুকলে দেখতে পাবে।"""
+    result = _telegram_api_raw("sendMessage", data={
+        "chat_id": TELEGRAM_CHANNEL_ID,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": "true",
+        "disable_notification": "false",   # সাউন্ডসহ নোটিফিকেশন (সর্বোচ্চ সম্ভব)
+    })
+    if result is None:
+        return None
+    return result.get("message_id")
+
+
+def pin_chat_message(message_id: int) -> bool:
+    """মেসেজ পিন করে (পিন নিজে যেন আলাদা নোটিফিকেশন না দেয়)।"""
+    return _telegram_api("pinChatMessage", data={
+        "chat_id": TELEGRAM_CHANNEL_ID,
+        "message_id": message_id,
+        "disable_notification": "true",
+    })
+
+
+def unpin_chat_message(message_id: Optional[int]) -> bool:
+    """নির্দিষ্ট মেসেজ আনপিন করে; message_id না থাকলে সব পিন খুলে দেয়।"""
+    data = {"chat_id": TELEGRAM_CHANNEL_ID}
+    if message_id:
+        data["message_id"] = message_id
+    return _telegram_api("unpinChatMessage", data=data)
 
 
 def send_single_photo(image_url: str = None, photo_bytes: bytes = None,
@@ -1123,8 +1215,11 @@ def is_similar_to_recent(conn, headline: str) -> bool:
 # POLLINATIONS_WATERMARK_CROP_PX পিক্সেল ক্রপ করে অবশিষ্ট ওয়াটারমার্ক সরানো হয়
 # =============================================================================
 def generate_ai_image_bytes(item: NewsItem, headline: str) -> Optional[bytes]:
-    """Pollinations.ai থেকে AI ছবি নামিয়ে ওয়াটারমার্ক ক্রপ করে PNG bytes দেয়।
-    ব্যর্থ হলে None — কলার তখন শুধু টেক্সট পাঠাবে।"""
+    """Pollinations.ai থেকে AI ছবি — এখন **২ বার চেষ্টা + PIL যাচাই**।
+    আগে Pollinations মাঝে মাঝে HTML/এরর রেসপন্স দিলেও সেটাই ছবি হিসেবে
+    চলে যেত বা এক চেষ্টায় ব্যর্থ হলে ছবিই আসত না — এখন ভ্যালিডেশন ছাড়া
+    কিছুই যায় না, আর দ্বিতীয় চেষ্টা আছে। ওয়াটারমার্ক ক্রপ হয়; ৪:৩ ফিট
+    পরে post_news_item-এ হয়। ব্যর্থ হলে None — কলার টেক্সটে যাবে।"""
     if not Config.ENABLE_AI_IMAGE:
         return None
     try:
@@ -1140,24 +1235,39 @@ def generate_ai_image_bytes(item: NewsItem, headline: str) -> Optional[bytes]:
             f"&height={Config.POLLINATIONS_HEIGHT}"
             f"&{Config.POLLINATIONS_EXTRA_PARAMS}"
         )
-        resp = requests.get(url, timeout=120, headers=HTTP_HEADERS)
-        resp.raise_for_status()
-
-        img = Image.open(io.BytesIO(resp.content)).convert("RGB")
-        w, h = img.size
-        # নিচের POLLINATIONS_WATERMARK_CROP_PX পিক্সেল ক্রপের পরেও রেশিও
-        # ঠিক ৪:৩ হয়ে যায় তাই আবার ফিট করা হয় (নিয়ম: সব নিউজ ছবি ৪:৩)
-        crop_px = Config.POLLINATIONS_WATERMARK_CROP_PX
-        if crop_px > 0 and h > crop_px + 64:
-            img = img.crop((0, 0, w, h - crop_px))
-        img = _fit_image_to_4_3(img)    # 🔴 ঠিক ৪:৩ (1280×960)
-
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        return buf.getvalue()
     except Exception as e:
-        log.warning("AI ছবি তৈরি ব্যর্থ: %s", e)
+        log.warning("AI ছবি URL তৈরি ব্যর্থ: %s", e)
         return None
+
+    for attempt in (1, 2):
+        try:
+            resp = requests.get(url, timeout=120, headers=HTTP_HEADERS)
+            resp.raise_for_status()
+            # Content-Type হেডার থাকলে তবেই চেক (মক/টেস্ট রেসপন্সে না থাকতে পারে)
+            ctype = ""
+            hdrs = getattr(resp, "headers", None)
+            if hdrs is not None:
+                try:
+                    ctype = (hdrs.get("Content-Type") or "").lower()
+                except Exception:
+                    ctype = ""
+            if ctype and "image" not in ctype:
+                raise ValueError(f"ইমেজ রেসপন্স নয়: {ctype or 'unknown'}")
+            validated = _validate_and_reencode(resp.content)
+            if not validated:
+                raise ValueError("ভ্যালিড ইমেজ নয় (PIL যাচাই ব্যর্থ)")
+            img = Image.open(io.BytesIO(validated)).convert("RGB")
+            w, h = img.size
+            # নিচের কয়েক পিক্সেল ক্রপ করে অবশিষ্ট ওয়াটারমার্ক টেক্সট সরানো হয়
+            crop_px = Config.POLLINATIONS_WATERMARK_CROP_PX
+            if crop_px > 0 and h > crop_px + 64:
+                img = img.crop((0, 0, w, h - crop_px))
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            return buf.getvalue()
+        except Exception as e:
+            log.warning("AI ছবি চেষ্টা %d ব্যর্থ: %s", attempt, e)
+    return None
 
 
 # =============================================================================
@@ -1184,10 +1294,9 @@ def build_news_caption(headline: str, sentiment: str, emoji: str,
     if item.source_type == "rss":
         lines += ["", f'🌐 <b>Source:</b> <a href="{html_escape(item.link)}">'
                        f'Click Here</a>']
-    # শেষ লাইন: "Follow: CRYPTO UPDATE" — মাঝে কোলন; শুধু CRYPTO UPDATE অংশেই
-    # ক্লিকেবল লিংক (<a> ট্যাগের ভেতরে), "Follow:" সাধারণ লেখা — ওতে চাপ দিলে কিছু হবে না
-    lines += ["", f'🔔 <b>Follow: <a href="{html_escape(Config.FOLLOW_CHANNEL_URL)}">'
-                   f'CRYPTO UPDATE</a></b>']
+    # শেষ লাইন: "Follow CRYPTO UPDATE" — পুরো অংশটাই একটা ক্লিকেবল লিংক
+    lines += ["", f'🔔 <b><a href="{html_escape(Config.FOLLOW_CHANNEL_URL)}">'
+                   f'Follow CRYPTO UPDATE</a></b>']
     return "\n".join(lines)
 
 
@@ -1221,52 +1330,100 @@ def _fit_image_to_4_3(img: Image.Image) -> Image.Image:
     return ImageOps.fit(img, (tw, th), Image.LANCZOS)
 
 
-def _download_image_bytes(url: str) -> Optional[Tuple[bytes, str, str]]:
-    """সোর্সের ছবি URL নিজে ডাউনলোড করে, **৪:৩ রেশিওতে ফিট** করে
-    (JPEG bytes, mime, ফাইলনেম) দেয়। সোর্স ছবি সরাসরি URL দিয়ে পাঠানো হয় না —
-    URL-এ রেশিও নিয়ন্ত্রণ করা যায় না, আর নিয়ম হলো প্রতিটি নিউজ ছবি ৪:৩।
-    ব্যর্থ হলে None (কলার AI ছবি/টেক্সটে যাবে)।"""
+MAX_IMAGE_BYTES = 8 * 1024 * 1024   # টেলিগ্রাম ফটো লিমিট ~10MB, নিরাপদ সীমা 8MB
+
+
+def _validate_and_reencode(data: bytes) -> Optional[bytes]:
+    """ছবির bytes আসল ইমেজ কিনা PIL দিয়ে যাচাই করে টেলিগ্রাম-বান্ধব
+    ফরম্যাটে রি-এনকোড করে (alpha থাকলে PNG, নাহলে JPEG)।
+    ভাঙা/ভুয়া (HTML এরর পেজ ইত্যাদি)/অতি ছোট/অতি বড় হলে None।"""
+    if not data or len(data) < 1024 or len(data) > MAX_IMAGE_BYTES:
+        return None
     try:
-        r = requests.get(url, timeout=20, headers=HTTP_HEADERS)
-        r.raise_for_status()
-        img = Image.open(io.BytesIO(r.content))
-        img.load()                      # ভাঙা/ভুল ফাইল হলে এখানেই এক্সেপশন
+        img = Image.open(io.BytesIO(data))
+        img.verify()                          # ফাইল আসলেই ভ্যালিড ইমেজ?
+        img = Image.open(io.BytesIO(data))    # verify-র পরে আবার open লাগে
+        if img.width < 40 or img.height < 40:
+            return None
+        if img.width + img.height > 10000:    # টেলিগ্রামের পিক্সেল লিমিট
+            return None
+        if max(img.size) > 1600:              # বিশাল ছবি ছোট করা
+            img.thumbnail((1600, 1600), Image.LANCZOS)
+        out = io.BytesIO()
+        if img.mode in ("RGBA", "LA", "P"):
+            img = img.convert("RGBA")
+            img.save(out, format="PNG")
+        else:
+            img = img.convert("RGB")
+            img.save(out, format="JPEG", quality=88)
+        result = out.getvalue()
+        return result if 1024 < len(result) <= MAX_IMAGE_BYTES else None
+    except Exception:
+        return None
+
+
+def _download_valid_image(url: str) -> Optional[bytes]:
+    """সোর্স ছবি নিজে ডাউনলোড + PIL যাচাই করে bytes রিটার্ন করে।
+    আগে মাঝে মাঝে ছবি মিস হতো (হটলিংক-ব্লক/টাইমআউট/ভুয়া রেসপন্স) —
+    এখন ডাউনলোডের পরে যাচাই, ব্যর্থ হলে পরের ক্যান্ডিডেট চেষ্টা হয়।"""
+    try:
+        resp = requests.get(url, timeout=20, headers=HTTP_HEADERS)
+        resp.raise_for_status()
+        ctype = (resp.headers.get("Content-Type") or "").lower()
+        if "html" in ctype or "text" in ctype:
+            return None     # ইমেজ নয় — ওয়েবপেজ/এরর পেজ
+        return _validate_and_reencode(resp.content)
+    except Exception as e:
+        log.debug("ছবি ডাউনলোড ব্যর্থ (%s): %s", url[:80], e)
+        return None
+
+
+def _fit_bytes_to_4_3(data: bytes) -> Optional[Tuple[bytes, str, str]]:
+    """ভ্যালিডেট করা ছবির bytes-কে ঠিক **৪:৩ রেশিওতে** ফিট করে
+    (JPEG bytes, mime, ফাইলনেম) দেয় — নিয়ম: প্রতিটি নিউজ ছবি ৪:৩।"""
+    try:
+        img = Image.open(io.BytesIO(data))
         img = _fit_image_to_4_3(img)    # 🔴 ঠিক ৪:৩
         buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=88)   # ছোট ফাইল, mime স্পষ্ট
+        img.save(buf, format="JPEG", quality=88)
         return buf.getvalue(), "image/jpeg", "source.jpg"
     except Exception as e:
-        log.debug("সোর্স ছবি ডাউনলোড ব্যর্থ (%s): %s", url, e)
+        log.debug("৪:৩ ফিট ব্যর্থ: %s", e)
         return None
 
 
 def post_news_item(item: NewsItem, headline: str, sentiment: str,
                    emoji: str) -> bool:
     """ক্যাপশন বানিয়ে ছবি/টেক্সট পাথে চ্যানেলে পোস্ট করে সফল হলে True।
-    ধাপ: ① সোর্সের প্রথম ছবি ডাউনলোড করে ৪:৩ ফিট → ② ফেল হলে AI ছবি (৪:৩)
-    → ③ শুধু টেক্সট। সব ছবিই ঠিক ৪:৩ রেশিওতে যায়।"""
+    ধাপ: ① সোর্স ছবি — নিজে ডাউনলোড + PIL যাচাই + ৪:৩ ফিট (৩টা ক্যান্ডিডেট
+    পর্যন্ত চেষ্টা) → ② AI ছবি (২ বার চেষ্টা + যাচাই + ৪:৩) → ③ শুধু টেক্সট।
+    সব ছবিই ঠিক ৪:৩ রেশিওতে যায়, সর্বোচ্চ ১টা ছবি, কখনো অ্যালবাম নয়।"""
     caption = build_news_caption(headline, sentiment, emoji, item)
 
-    # ১) সোর্সের নিজস্ব ছবি — ডাউনলোড করে ঠিক ৪:৩ রেশিওতে ফিট করে পাঠানো হয়।
-    #    সরাসরি URL পাঠানো হয় না, কারণ URL-এ রেশিও নিয়ন্ত্রণ করা যায় না —
-    #    নিয়ম: প্রতিটি নিউজ ছবি অবশ্যই ৪:৩ (সর্বোচ্চ ১টা ছবি, কখনো অ্যালবাম নয়)।
+    # ১) সোর্সের নিজস্ব ছবি — আগে শুধু প্রথম URL-টা চেষ্টা হতো, সেটা ব্যর্থ
+    #    হলেই সোর্স ছবি মিস যেত; এখন ৩টা ক্যান্ডিডেট পর্যন্ত চেষ্টা হয় এবং
+    #    প্রতিটা ডাউনলোডের পরে PIL যাচাই (ভুয়া/ভাঙা ছবি কখনো যায় না)।
     source_images = dedupe_urls(item.images)
+    for url in source_images[:3]:
+        raw_bytes = _download_valid_image(url)
+        if not raw_bytes:
+            continue
+        fitted = _fit_bytes_to_4_3(raw_bytes)   # 🔴 ঠিক ৪:৩
+        if fitted and send_single_photo(photo_bytes=fitted[0], filename=fitted[2],
+                                        content_type=fitted[1], caption=caption,
+                                        parse_mode="HTML"):
+            return True
     if source_images:
-        downloaded = _download_image_bytes(source_images[0])
-        if downloaded:
-            img_bytes, img_mime, img_name = downloaded
-            if send_single_photo(photo_bytes=img_bytes, filename=img_name,
-                                 content_type=img_mime, caption=caption,
-                                 parse_mode="HTML"):
-                return True
         log.warning("সোর্স ছবি ডাউনলোড/পাঠানো ব্যর্থ — AI ছবির দিকে যাচ্ছি")
 
-    # ২) AI ছবি
+    # ২) AI ছবি (২ বার চেষ্টা + যাচাই) → ৪:৩ ফিট
     if Config.ENABLE_AI_IMAGE:
         ai_bytes = generate_ai_image_bytes(item, headline)
         if ai_bytes:
-            if send_single_photo(photo_bytes=ai_bytes, caption=caption,
-                                 parse_mode="HTML", filename="ai_news.png"):
+            fitted = _fit_bytes_to_4_3(ai_bytes)
+            if fitted and send_single_photo(photo_bytes=fitted[0], filename="ai_news.jpg",
+                                            content_type=fitted[1], caption=caption,
+                                            parse_mode="HTML"):
                 return True
             log.warning("AI ছবি পাঠানো যায়নি — শুধু টেক্সটে যাচ্ছি")
 
@@ -1304,6 +1461,15 @@ def handle_single_item(conn, item: NewsItem) -> None:
         return
 
     headline = data["headline_bn"]
+
+    # 🔴 কঠোর নিয়ম (ব্যবহারকারীর নির্দেশ): NEUTRAL/ন্যাচারাল খবর কখনো
+    # পোস্ট হবে না — চ্যানেলে শুধু BULLISH/BEARISH (মার্কেট-ইমপ্যাক্ট) খবর যায়।
+    # posted=0 হিসেবে DB-তে সেভ যাতে একই লিংক আর কখনো প্রসেস না হয়।
+    if data["sentiment"] not in ("BULLISH", "BEARISH"):
+        record_item(conn, item, headline, posted=0)
+        log.info("NEUTRAL সেন্টিমেন্ট — বাদ (শুধু BULLISH/BEARISH পোস্ট হয়): %s",
+                 item.link)
+        return
 
     # (২) সেমান্টিক ডুপ্লিকেট — মিল গেলে বাদ, কিন্তু posted=0 হিসেবে DB-তে
     # সেভ থাকে যাতে পরের সাইকেলে আবার প্রসেস না হয়
@@ -1375,10 +1541,41 @@ def run_cycle(conn) -> None:
 # ৫. প্রাইস অ্যালার্ট সিস্টেম (আলাদা daemon থ্রেড, নিজস্ব DB কানেকশন)
 # =============================================================================
 
+_LAST_VALID_PRICE: Dict[str, Tuple[float, float]] = {}   # symbol -> (price, unix_ts)
+PRICE_JUMP_MAX_PCT = 8.0    # ১০ মিনিটের উইন্ডোতে ৮%-এর বেশি লাফ = স্টেল/ভুল ডেটা
+
+
+def _price_sane(symbol: str, price: float) -> bool:
+    """নতুন দাম গত ভ্যালিড দামের তুলনায় অস্বাভাবিক লাফ দিলে reject।
+    CoinGecko-র স্টেল ডেটা / Binance গ্লিচে ভুল প্রাইস অ্যালার্ট এভাবে আটকায়।"""
+    if not math.isfinite(price) or price <= 0:
+        return False
+    last = _LAST_VALID_PRICE.get(symbol)
+    if last:
+        last_price, ts = last
+        if time.time() - ts < 600:      # গত ১০ মিনিটের বেসলাইন
+            change_pct = abs(price - last_price) / last_price * 100.0
+            if change_pct > PRICE_JUMP_MAX_PCT:
+                log.warning("অস্বাভাবিক প্রাইস জাম্প (%s): %.2f → %.2f (%.1f%%) — রিজেক্ট",
+                            symbol, last_price, price, change_pct)
+                return False
+    return True
+
+
+def _accept_price(symbol: str, price: float) -> float:
+    """ভ্যালিড দাম ক্যাশে সেভ করে রিটার্ন করে (পরের স্যানিটি চেকের বেসলাইন)।"""
+    _LAST_VALID_PRICE[symbol] = (price, time.time())
+    return price
+
+
 def fetch_spot_price(symbol: str) -> Optional[float]:
     """লাইভ স্পট দাম: আগে Binance, ব্যর্থ হলে (region-block/downtime)
-    CoinGecko-তে স্বয়ংক্রিয় ফলব্যাক; দুটোই ফেল হলে None (ক্র্যাশ নয়)।"""
-    # ধাপ ১: Binance
+    CoinGecko-তে স্বয়ংক্রিয় ফলব্যাক।
+    🔴 উভয় সোর্সেই স্যানিটি চেক: গত ১০ মিনিটের ভ্যালিড দামের তুলনায়
+    ৮%-এর বেশি লাফ = ভুল/স্টেল ডেটা → রিজেক্ট। দুটোই ফেল/রিজেক্ট হলে
+    শেষ ভ্যালিড দাম (১০ মিনিটের ভেতরের হলে) ফলব্যাক, নাহলে None।"""
+    # ধাপ ১: Binance (প্রাইমারি)
+    binance_price = None
     try:
         r = requests.get(
             Config.BINANCE_TICKER_URL,
@@ -1387,26 +1584,37 @@ def fetch_spot_price(symbol: str) -> Optional[float]:
             headers=HTTP_HEADERS,
         )
         r.raise_for_status()
-        return float(r.json()["price"])
+        binance_price = float(r.json()["price"])
     except Exception as e:
         log.debug("Binance দাম ব্যর্থ (%s): %s", symbol, e)
 
-    # ধাপ ২: CoinGecko ফলব্যাক
+    if binance_price is not None and _price_sane(symbol, binance_price):
+        return _accept_price(symbol, binance_price)
+
+    # ধাপ ২: CoinGecko ফলব্যাক — একই স্যানিটি চেক
     cg_id = COINGECKO_IDS.get(symbol)
-    if not cg_id:
-        return None
-    try:
-        r = requests.get(
-            Config.COINGECKO_PRICE_URL,
-            params={"ids": cg_id, "vs_currencies": "usd"},
-            timeout=10,
-            headers=HTTP_HEADERS,
-        )
-        r.raise_for_status()
-        return float(r.json()[cg_id]["usd"])
-    except Exception as e:
-        log.warning("CoinGecko দামও ব্যর্থ (%s): %s — এই চেক স্কিপ", symbol, e)
-        return None
+    if cg_id:
+        try:
+            r = requests.get(
+                Config.COINGECKO_PRICE_URL,
+                params={"ids": cg_id, "vs_currencies": "usd"},
+                timeout=10,
+                headers=HTTP_HEADERS,
+            )
+            r.raise_for_status()
+            cg_price = float(r.json()[cg_id]["usd"])
+            if _price_sane(symbol, cg_price):
+                return _accept_price(symbol, cg_price)
+            log.warning("CoinGecko দাম স্যানিটি চেকে রিজেক্ট (%s): %.2f", symbol, cg_price)
+        except Exception as e:
+            log.warning("CoinGecko দামও ব্যর্থ (%s): %s", symbol, e)
+
+    # ধাপ ৩: সব ব্যর্থ/রিজেক্ট → শেষ ভ্যালিড দাম (১০ মিনিটের ভেতরের হলে)
+    last = _LAST_VALID_PRICE.get(symbol)
+    if last and time.time() - last[1] < 600:
+        log.warning("ফলব্যাক: %s-এর শেষ ক্যাশড ভ্যালিড দাম ব্যবহার হচ্ছে", symbol)
+        return last[0]
+    return None
 
 
 def fetch_recent_candles(symbol: str) -> List[Tuple[float, float, float, float]]:
@@ -1931,6 +2139,301 @@ def generate_price_card_bytes(symbol: str, milestone: float,
 # =============================================================================
 # মেইন — validate → DB → প্রাইস থ্রেড শুরু → নিউজের while True লুপ
 # =============================================================================
+# =============================================================================
+# ৭. ইকোনমিক ক্যালেন্ডার — হাই-ইমপ্যাক্ট ইভেন্ট অ্যালার্ট (NFP/FOMC/CPI টাইপ)
+#    ফ্লো: ১ ঘণ্টা আগে বাংলা বিশ্লেষণসহ অ্যালার্ট (নন-সাইলেন্ট + অটো-পিন)
+#          → ৩০ মিনিট আগে ছোট রিমাইন্ডার (ফুল নিউজ দ্বিতীয়বার নয়)
+#          → ইভেন্টের ~৫ মিনিট পর BTC/ETH রিঅ্যাকশন অ্যানালাইসিস + আনপিন
+#    আলাদা daemon থ্রেডে চলে (econ_event_loop), প্রতি মিনিটে চেক।
+# =============================================================================
+_CAL_CACHE: Dict[str, Any] = {"ts": 0.0, "events": []}
+
+
+def _fmt_dhaka(dt_utc: datetime) -> str:
+    """UTC → বাংলাদেশ সময় (UTC+6) ফরম্যাটে।"""
+    d = dt_utc + timedelta(hours=Config.DHAKA_OFFSET_HOURS)
+    return d.strftime("%d %b, %I:%M %p") + " (BD সময়)"
+
+
+def fetch_econ_events() -> List[Dict[str, Any]]:
+    """Forex Factory ফ্রি উইকলি ক্যালেন্ডার JSON ফেচ করে (১৫ মিনিট ক্যাশ)।
+    শুধু High impact + USD/EUR + ভবিষ্যতের ইভেন্ট ফিল্টার করে।"""
+    now = time.time()
+    if now - _CAL_CACHE["ts"] < Config.ECON_CACHE_TTL_SECONDS and _CAL_CACHE["events"]:
+        return _CAL_CACHE["events"]
+    events: List[Dict[str, Any]] = []
+    try:
+        r = requests.get(Config.FF_CALENDAR_URL, timeout=20, headers=HTTP_HEADERS)
+        r.raise_for_status()
+        raw = r.json()
+        utc_now = datetime.now(timezone.utc)
+        for ev in raw:
+            try:
+                impact = (ev.get("impact") or "").strip()
+                country = (ev.get("country") or "").strip().upper()
+                title = (ev.get("title") or "").strip()
+                if impact not in Config.ECON_IMPACTS:
+                    continue
+                if country and country not in Config.ECON_CURRENCIES:
+                    continue
+                if not title:
+                    continue
+                dt = datetime.fromisoformat(ev["date"])
+                dt_utc = dt.astimezone(timezone.utc)
+                if dt_utc < utc_now:
+                    continue        # অতীতের ইভেন্ট বাদ
+                ev_id = hashlib.sha256(
+                    f"{country}|{ev['date']}|{title}".encode("utf-8")
+                ).hexdigest()[:32]
+                events.append({
+                    "event_id": ev_id,
+                    "title": title,
+                    "country": country,
+                    "event_time": dt_utc,
+                    "forecast": str(ev.get("forecast") or "—"),
+                    "previous": str(ev.get("previous") or "—"),
+                })
+            except Exception:
+                continue
+        _CAL_CACHE["ts"] = now
+        _CAL_CACHE["events"] = events
+        log.info("ইকোনমিক ক্যালেন্ডার: %dটা হাই-ইমপ্যাক্ট আসন্ন ইভেন্ট", len(events))
+    except Exception as e:
+        log.warning("ইকোনমিক ক্যালেন্ডার ফেচ ব্যর্থ: %s", e)
+    return _CAL_CACHE["events"]
+
+
+_ECON_PRE_PROMPT = """তুমি ক্রিপ্টো মার্কেট অ্যানালিস্ট। একটি আসন্ন হাই-ইমপ্যাক্ট অর্থনৈতিক ইভেন্ট:
+ইভেন্ট: {title} ({country})
+সময় (বাংলাদেশ সময়): {bd_time}
+Forecast: {forecast} | Previous: {previous}
+
+বাংলায় সংক্ষেপে (সর্বোচ্চ ৪ লাইন) লেখো:
+১) ইভেন্টটি কী (এক লাইনে)
+২) কোন পরিস্থিতিতে ক্রিপ্টোর জন্য BULLISH (🟢)
+৩) কোন পরিস্থিতিতে BEARISH (🔴)
+শুধু টেক্সট লেখো, অন্য কিছু নয়।"""
+
+
+def analyze_econ_event(ev: Dict[str, Any]) -> str:
+    """ইভেন্টের আগে বাংলা বিশ্লেষণ (Gemini); ব্যর্থ হলে টেমপ্লেট ফলব্যাক।"""
+    prompt = _ECON_PRE_PROMPT.format(
+        title=ev["title"], country=ev["country"],
+        bd_time=_fmt_dhaka(ev["event_time"]),
+        forecast=ev["forecast"], previous=ev["previous"],
+    )
+    try:
+        text = _call_gemini(Config.GEMINI_TEXT_MODEL, prompt)
+        if text and len(text.strip()) > 20:
+            return html_escape(text.strip()[:600])
+    except Exception as e:
+        log.warning("ইভেন্ট অ্যানালাইসিস ব্যর্থ: %s", e)
+    return html_escape(
+        f"🟢 Forecast ({ev['forecast']})-এর চেয়ে ভালো হলে ক্রিপ্টোতে BULLISH রিঅ্যাকশন আসতে পারে।\n"
+        f"🔴 Forecast-এর চেয়ে খারাপ (Previous {ev['previous']}-এর কাছাকাছি/নিচে) হলে "
+        f"BEARISH চাপ আসতে পারে।"
+    )
+
+
+_ECON_RESULT_PROMPT = """তুমি ক্রিপ্টো মার্কেট অ্যানালিস্ট। এইমাত্র একটি হাই-ইমপ্যাক্ট ইভেন্ট শেষ হয়েছে:
+ইভেন্ট: {title} ({country})
+Forecast: {forecast} | Previous: {previous}
+
+ইভেন্টের পর মার্কেট রিঅ্যাকশন:
+BTC: {btc_before} → {btc_after} ({btc_pct:+.2f}%)
+ETH: {eth_before} → {eth_after} ({eth_pct:+.2f}%)
+
+বাংলায় সংক্ষেপে (সর্বোচ্চ ৩ লাইন) বিশ্লেষণ করো: ইভেন্ট মার্কেটে কেমন ইমপ্যাক্ট ফেলল
+এবং পরবর্তী সম্ভাবনা কী। শুধু টেক্সট লেখো।"""
+
+
+def analyze_econ_result(ev, btc_b, btc_a, eth_b, eth_a) -> Tuple[str, float, float]:
+    """ইভেন্টের পরের মার্কেট রিঅ্যাকশন বিশ্লেষণ; ব্যর্থ হলে টেমপ্লেট ফলব্যাক।"""
+    btc_pct = (btc_a - btc_b) / btc_b * 100.0 if btc_b else 0.0
+    eth_pct = (eth_a - eth_b) / eth_b * 100.0 if eth_b else 0.0
+    prompt = _ECON_RESULT_PROMPT.format(
+        title=ev["title"], country=ev["country"],
+        forecast=ev["forecast"], previous=ev["previous"],
+        btc_before=f"${btc_b:,.0f}", btc_after=f"${btc_a:,.0f}", btc_pct=btc_pct,
+        eth_before=f"${eth_b:,.0f}", eth_after=f"${eth_a:,.0f}", eth_pct=eth_pct,
+    )
+    try:
+        text = _call_gemini(Config.GEMINI_TEXT_MODEL, prompt)
+        if text and len(text.strip()) > 20:
+            return html_escape(text.strip()[:600]), btc_pct, eth_pct
+    except Exception as e:
+        log.warning("রেজাল্ট অ্যানালাইসিস ব্যর্থ: %s", e)
+    emoji_b = "🟢" if btc_pct >= 0 else "🔴"
+    emoji_e = "🟢" if eth_pct >= 0 else "🔴"
+    fallback = html_escape(
+        f"ইভেন্টের পর BTC {btc_pct:+.2f}% {emoji_b} এবং ETH {eth_pct:+.2f}% {emoji_e} "
+        f"মুভ করেছে। ভোলাটিলিটি বেশি থাকতে পারে — ঝুঁকি নিয়ে ট্রেড করবেন না।"
+    )
+    return fallback, btc_pct, eth_pct
+
+
+def _send_t60_alert(conn, ev: Dict[str, Any]) -> None:
+    """১ ঘণ্টা আগে: বিশ্লেষণসহ অ্যালার্ট (নন-সাইলেন্ট) + অটো-পিন।"""
+    analysis = analyze_econ_event(ev)
+    text = (
+        f"🚨 <b>হাই-ইমপ্যাক্ট ইকোনমিক ইভেন্ট</b> 📅\n\n"
+        f"📌 <b>{html_escape(ev['title'])}</b> ({html_escape(ev['country'])})\n"
+        f"🕐 সময়: <b>{_fmt_dhaka(ev['event_time'])}</b>\n"
+        f"📊 Forecast: <b>{html_escape(ev['forecast'])}</b> | "
+        f"Previous: <b>{html_escape(ev['previous'])}</b>\n\n"
+        f"{analysis}\n\n"
+        f"🔔 <b><a href=\"{html_escape(Config.FOLLOW_CHANNEL_URL)}\">Follow CRYPTO UPDATE</a></b>"
+    )
+    mid = send_text_message_notify(text)
+    if mid is None:
+        log.warning("T60 অ্যালার্ট পাঠানো যায়নি: %s", ev["title"])
+        return
+    pin_chat_message(mid)
+    # ইভেন্টের আগের বেসলাইন প্রাইস সেভ (রেজাল্ট অ্যানালাইসিসে লাগবে)
+    btc = fetch_spot_price("BTCUSDT")
+    eth = fetch_spot_price("ETHUSDT")
+    conn.execute(
+        "UPDATE econ_events SET t60_sent = 1, pinned_message_id = ?, "
+        "pre_btc = COALESCE(?, pre_btc), pre_eth = COALESCE(?, pre_eth) "
+        "WHERE event_id = ?",
+        (mid, btc, eth, ev["event_id"]),
+    )
+    conn.commit()
+    log.info("⏰ T60 অ্যালার্ট পাঠানো + পিন হয়েছে: %s (mid=%s)", ev["title"], mid)
+
+
+def _send_t30_reminder(conn, ev: Dict[str, Any]) -> None:
+    """৩০ মিনিট আগে: ফুল নিউজ দ্বিতীয়বার নয় — শুধু ছোট নন-সাইলেন্ট রিমাইন্ডার।"""
+    text = (
+        f"⏰ <b>আর ৩০ মিনিট!</b>\n"
+        f"📌 <b>{html_escape(ev['title'])}</b> ({html_escape(ev['country'])})\n"
+        f"🕐 {_fmt_dhaka(ev['event_time'])}"
+    )
+    mid = send_text_message_notify(text)
+    # বেসলাইন প্রাইস রিফ্রেশ (ইভেন্টের কাছাকাছি সঠিক বেসলাইন)
+    btc = fetch_spot_price("BTCUSDT")
+    eth = fetch_spot_price("ETHUSDT")
+    conn.execute(
+        "UPDATE econ_events SET t30_sent = 1, "
+        "pre_btc = COALESCE(?, pre_btc), pre_eth = COALESCE(?, pre_eth) "
+        "WHERE event_id = ?",
+        (btc, eth, ev["event_id"]),
+    )
+    conn.commit()
+    if mid:
+        log.info("⏰ T30 রিমাইন্ডার পাঠানো হয়েছে: %s", ev["title"])
+
+
+def _send_result_analysis(conn, ev: Dict[str, Any],
+                          pre_btc: Optional[float], pre_eth: Optional[float]) -> None:
+    """ইভেন্টের ~৫ মিনিট পর: BTC/ETH রিঅ্যাকশন অ্যানালাইসিস পোস্ট + আনপিন।"""
+    btc_a = fetch_spot_price("BTCUSDT")
+    eth_a = fetch_spot_price("ETHUSDT")
+    if btc_a is None or eth_a is None or not pre_btc or not pre_eth:
+        # দাম/বেসলাইন পাওয়া যায়নি — এই চেক স্কিপ, পরের মিনিটে আবার চেষ্টা
+        return
+    analysis, btc_pct, eth_pct = analyze_econ_result(
+        ev, pre_btc, btc_a, pre_eth, eth_a)
+    btc_emoji = "📈" if btc_pct >= 0 else "📉"
+    eth_emoji = "📈" if eth_pct >= 0 else "📉"
+    text = (
+        f"📊 <b>ইভেন্ট রেজাল্ট:</b> {html_escape(ev['title'])} ({html_escape(ev['country'])})\n"
+        f"📊 Forecast: {html_escape(ev['forecast'])} | Previous: {html_escape(ev['previous'])}\n\n"
+        f"{btc_emoji} BTC: ${pre_btc:,.0f} → <b>${btc_a:,.0f}</b> ({btc_pct:+.2f}%)\n"
+        f"{eth_emoji} ETH: ${pre_eth:,.0f} → <b>${eth_a:,.0f}</b> ({eth_pct:+.2f}%)\n\n"
+        f"{analysis}\n\n"
+        f"🔔 <b><a href=\"{html_escape(Config.FOLLOW_CHANNEL_URL)}\">Follow CRYPTO UPDATE</a></b>"
+    )
+    if not send_text_message(text, parse_mode="HTML"):
+        log.warning("রেজাল্ট অ্যানালাইসিস পাঠানো যায়নি: %s", ev["title"])
+        return
+    row = conn.execute(
+        "SELECT pinned_message_id FROM econ_events WHERE event_id = ?",
+        (ev["event_id"],)
+    ).fetchone()
+    if row and row[0]:
+        unpin_chat_message(row[0])   # পিন করা অ্যালার্ট আনপিন
+    conn.execute(
+        "UPDATE econ_events SET result_sent = 1 WHERE event_id = ?",
+        (ev["event_id"],)
+    )
+    conn.commit()
+    log.info("✅ ইভেন্ট রেজাল্ট পোস্ট + আনপিন সম্পন্ন: %s", ev["title"])
+
+
+def _econ_cycle(conn) -> None:
+    """একবার ক্যালেন্ডার চেক — প্রতিটি ইভেন্টের জন্য স্টেজ অনুযায়ী অ্যাকশন।"""
+    now = datetime.now(timezone.utc)
+    events = fetch_econ_events()
+
+    for ev in events:
+        try:
+            row = conn.execute(
+                "SELECT t60_sent, t30_sent, result_sent, pinned_message_id, "
+                "pre_btc, pre_eth FROM econ_events WHERE event_id = ?",
+                (ev["event_id"],)
+            ).fetchone()
+            if row is None:
+                conn.execute(
+                    "INSERT OR IGNORE INTO econ_events "
+                    "(event_id, title, country, event_time, forecast, previous) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (ev["event_id"], ev["title"], ev["country"],
+                     ev["event_time"].isoformat(), ev["forecast"], ev["previous"]),
+                )
+                conn.commit()
+                row = (0, 0, 0, None, None, None)
+
+            t60, t30, done, pinned, pre_btc, pre_eth = row
+            mins_left = (ev["event_time"] - now).total_seconds() / 60.0
+
+            # ---- ধাপ ১: ১ ঘণ্টা আগে প্রথম অ্যালার্ট + পিন ----
+            if not t60 and 0 < mins_left <= Config.ECON_T60_MINUTES:
+                _send_t60_alert(conn, ev)
+
+            # ---- ধাপ ২: ৩০ মিনিট আগে ছোট রিমাইন্ডার ----
+            elif t60 and not t30 and 0 < mins_left <= Config.ECON_T30_MINUTES:
+                _send_t30_reminder(conn, ev)
+
+            # ---- ইভেন্টের শেষ ৫ মিনিটে বেসলাইন প্রাইস আপডেট ----
+            elif (t60 and not done and
+                  0 < mins_left <= Config.ECON_RESULT_DELAY_MINUTES):
+                btc = fetch_spot_price("BTCUSDT")
+                eth = fetch_spot_price("ETHUSDT")
+                if btc and eth:
+                    conn.execute(
+                        "UPDATE econ_events SET pre_btc = ?, pre_eth = ? "
+                        "WHERE event_id = ?",
+                        (btc, eth, ev["event_id"]),
+                    )
+                    conn.commit()
+
+            # ---- ধাপ ৩: ইভেন্টের ~৫ মিনিট পর রেজাল্ট + আনপিন ----
+            elif (t60 and not done and
+                  now >= ev["event_time"] + timedelta(minutes=Config.ECON_RESULT_DELAY_MINUTES) and
+                  now <= ev["event_time"] + timedelta(hours=Config.ECON_RESULT_WINDOW_HOURS)):
+                _send_result_analysis(conn, ev, pre_btc, pre_eth)
+
+        except Exception as e:
+            log.exception("ইভেন্ট প্রসেস ব্যর্থ (%s): %s", ev.get("title"), e)
+
+    # ৩ দিনের পুরনো রেকর্ড ক্লিনআপ
+    cutoff = (now - timedelta(days=3)).isoformat()
+    conn.execute("DELETE FROM econ_events WHERE event_time < ?", (cutoff,))
+    conn.commit()
+
+
+def econ_event_loop() -> None:
+    """ইকোনমিক ক্যালেন্ডার থ্রেড (daemon) — প্রতি মিনিটে চেক, কখনো ক্র্যাশ নয়।"""
+    conn = get_db()   # থ্রেড-আলাদা কানেকশন (sqlite থ্রেড-সেফ নয়)
+    while True:
+        try:
+            _econ_cycle(conn)
+        except Exception as e:
+            log.exception("ইকোনমিক সাইকেলে এক্সেপশন: %s", e)
+        time.sleep(Config.ECON_CHECK_SECONDS)
+
+
 def main() -> None:
     """বটের এন্ট্রিপয়েন্ট।
     ১) validate_config() — ৩টা env var + genai প্যাকেজ, না থাকলে RuntimeError
@@ -1955,6 +2458,16 @@ def main() -> None:
         log.info("প্রাইস অ্যালার্ট থ্রেড শুরু হয়েছে (daemon)")
     else:
         log.info("প্রাইস অ্যালার্ট বন্ধ আছে (ENABLE_PRICE_ALERTS=False)")
+
+    # ইকোনমিক ক্যালেন্ডার — আলাদা daemon থ্রেড; মূল লুপকে ব্লক করে না
+    if Config.ENABLE_ECON_CALENDAR:
+        te = threading.Thread(
+            target=econ_event_loop, daemon=True, name="econ-calendar"
+        )
+        te.start()
+        log.info("ইকোনমিক ক্যালেন্ডার থ্রেড শুরু হয়েছে (daemon)")
+    else:
+        log.info("ইকোনমিক ক্যালেন্ডার বন্ধ আছে (ENABLE_ECON_CALENDAR=False)")
 
     # সিড টেস্ট সম্পূর্ণ বন্ধ — main() থেকে কখনো কল হবে না
     if Config.ENABLE_SEED_TEST:
