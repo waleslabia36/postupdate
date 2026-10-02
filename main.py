@@ -1279,9 +1279,14 @@ def build_news_caption(headline: str, sentiment: str, emoji: str,
     if item.source_type == "rss":
         lines += ["", f'🌐 <b>Source:</b> <a href="{html_escape(item.link)}">'
                        f'Click Here</a>']
-    # পুরো Follow CRYPTO UPDATE লেবেলটি একসাথে ক্লিকেবল।
-    lines += ["", f'🔔 <b><a href="{html_escape(Config.FOLLOW_CHANNEL_URL)}">'
-                   f'Follow CRYPTO UPDATE</a></b>']
+    follow_url = html_escape(Config.FOLLOW_CHANNEL_URL)
+    # চ্যানেল ফলো করার দুইটি দৃশ্যমান CTA — আলাদা লাইনে, একই চ্যানেল লিংক।
+    lines += [
+        "",
+        f'🔔 <b><a href="{follow_url}">Follow CRYPTO UPDATE</a></b>',
+        "",
+        f'<b>Follow: <a href="{follow_url}">CRYPTO UPDATE</a></b>',
+    ]
     return "\n".join(lines)
 
 
