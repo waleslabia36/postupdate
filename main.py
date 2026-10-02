@@ -2532,3 +2532,6 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         log.info("বন্ধ করা হচ্ছে...")
         sys.exit(0)
+      
+if __name__ == "__main__":
+    main()
