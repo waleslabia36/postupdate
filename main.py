@@ -223,6 +223,11 @@ class Config:
     # আইটেম প্রসেসের সুযোগ রাখতে ১৫ — নাহলে খবরের ব্যাকলগ জমে যাবে
     MAX_ITEMS_PER_CYCLE = 15
 
+    # "ন্যাচারাল"/নিরপেক্ষ (NEUTRAL) সেন্টিমেন্টের খবর পোস্ট করা হবে?
+    # True  = হ্যাঁ (সব সেন্টিমেন্ট চ্যানেলে যায়) — বর্তমান সেটিং
+    # False = না (শুধু BULLISH/BEARISH; NEUTRAL DB-তে posted=0 সেভ হয়)
+    POST_NEUTRAL = True
+
     # বাংলা হেডলাইনের দৈর্ঘ্য সীমা (অক্ষর)
     HEADLINE_MIN_CHARS = 100
     HEADLINE_MAX_CHARS = 150
@@ -1406,10 +1411,10 @@ def handle_single_item(conn, item: NewsItem) -> None:
 
     headline = data["headline_bn"]
 
-    # (১ক) 🔴 নতুন নিয়ম: "ন্যাচারাল"/নিরপেক্ষ (NEUTRAL) খবর কখনো পোস্ট হবে না —
-    # চ্যানেলে শুধু মার্কেট-ইমপ্যাক্ট খবর (BULLISH/BEARISH) যাবে।
-    # DB-তে posted=0 হিসেবে সেভ থাকে যাতে পরের সাইকেলে আবার প্রসেস না হয়।
-    if data["sentiment"] == "NEUTRAL":
+    # (১ক) "ন্যাচারাল"/নিরপেক্ষ (NEUTRAL) খবর — এখন পোস্ট হয়
+    # (Config.POST_NEUTRAL = True)। ভবিষ্যতে বাদ দিতে হলে সেটি False
+    # করলেই হবে — তখন DB-তে posted=0 সেভ থাকে, আর প্রসেস হবে না।
+    if data["sentiment"] == "NEUTRAL" and not Config.POST_NEUTRAL:
         record_item(conn, item, headline, posted=0)
         log.info("নিউট্রাল সেন্টিমেন্ট (ন্যাচারাল) — বাদ: %s", item.link)
         return
@@ -2532,6 +2537,3 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         log.info("বন্ধ করা হচ্ছে...")
         sys.exit(0)
-      
-if __name__ == "__main__":
-    main()
