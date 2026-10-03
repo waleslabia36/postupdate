@@ -138,7 +138,9 @@ class Config:
     EVENT_CURRENCIES = ("USD",)      # কোন মুদ্রার ইভেন্ট ট্র্যাক হবে
     EVENT_ALERT_LEAD_1 = 60          # T−৬০ মিনিট: বিশ্লেষণ-বার্তা + সাথে সাথে পিন
     EVENT_ALERT_LEAD_2 = 30          # T−৩০ মিনিট: একই মেসেজ EDIT + রি-পিন (নতুন মেসেজ নয়)
-    EVENT_IMPACT_DELAY = 15          # ইভেন্টের +১৫ মিনিট: ফলাফল+ইমপ্যাক্ট পোস্ট, পরে আনপিন
+    EVENT_IMPACT_DELAY = 0           # T+০ মিনিট (ইভেন্টের সাথে সাথেই ইনস্ট্যান্ট ইমপ্যাক্ট পোস্ট)
+    EVENT_ACTUAL_WAIT_MAX_SECONDS = 30  # ডাটা প্রকাশের পর Actual সংখ্যার জন্য সর্বোচ্চ ৩০ সেকেন্ড (প্রতি ৫ সেকেন্ডে) লাইভ চেক
+    EVENT_LOOP_SLEEP_SECONDS = 15    # ইভেন্ট থ্রেডে প্রতি ১৫ সেকেন্ডে ফাস্ট চেক (ইভেন্টের সময় ১০ সেকেন্ড)
     EVENT_HORIZON_HOURS = 168        # আগামী ৭ দিনের ইভেন্ট মনে রাখা হয়
     EVENT_CAL_REFRESH_SECONDS = 3600 # ক্যালেন্ডারের নেট ফেচ ঘণ্টায় একবার
     EVENT_BD_UTC_OFFSET = 6          # বাংলাদেশ সময় = UTC+6 (বাংলাদেশে DST নেই)
@@ -183,14 +185,12 @@ class Config:
     #                       মাল্টি-সোর্স ক্রিপ্টো নিউজ অ্যাগ্রিগেটর)
     TELEGRAM_CHANNELS = [
         "WatcherGuru",
+        "unfolded",
         "cointelegraph",
-        "tier10k",
-        "WuBlockchain",
         "whale_alert_io",
         "CoindeskGlobal",
         "the_block_crypto",
         "decryptnews",
-        "cryptoboten",
     ]
     # প্রতি চ্যানেল থেকে সর্বোচ্চ কয়েকটা সাম্প্রতিক পোস্ট নেওয়া হবে
     TELEGRAM_MAX_POSTS_PER_CHANNEL = 8
@@ -584,7 +584,7 @@ def pin_message(message_id: int) -> bool:
     return bool(_telegram_api("pinChatMessage", data={
         "chat_id": TELEGRAM_CHANNEL_ID,
         "message_id": int(message_id),
-        "disable_notification": "true",
+        "disable_notification": "false",
     }))
 
 
@@ -952,20 +952,21 @@ def is_item_fresh(item: NewsItem, now: Optional[datetime] = None) -> bool:
 # Gemini API সম্পূর্ণ ব্যর্থ।
 # =============================================================================
 _HEADLINE_SYSTEM_PROMPT = """তুমি "CRYPTO BARTA" টেলিগ্রাম চ্যানেলের একজন অভিজ্ঞ ক্রিপ্টো নিউজ এডিটর।
-নিচে একটি ক্রিপ্টো খবর দেওয়া আছে — সেটি থেকে বাংলা হেডলাইন লিখো।
+নিচে একটি খবর দেওয়া আছে — আগে যাচাই করো এটি ক্রিপ্টো/ব্লকচেইন বা ক্রিপ্টো মার্কেটে প্রভাব ফেলার মতো অর্থনৈতিক খবর কিনা, তারপর বাংলা হেডলাইন লিখো।
 
 সোর্স: {source}
 খবরের শিরোনাম: {title}
 খবরের বিবরণ: {summary}
 
 নিয়ম (অবশ্যই মানতে হবে):
-- এই খবরটি ছোট, রুটিন বা মাইনর হলেও অবশ্যই একটি হেডলাইন দাও — কোনো খবর বাদ দেবে না, কোনো খবরকে "গুরুত্বহীন" বলে ফেলবে না।
-- headline_bn ঠিক {min_chars}–{max_chars} অক্ষরের হবে (বাংলা) এবং খবরের "কোর ইনসিডেন্ট" সংক্ষেপে বলবে — কোনো মতামত/বাড়তি ব্যাখ্যা নয়।
+- is_crypto: খবরটি যদি ক্রিপ্টোকারেন্সি (Bitcoin, Ethereum, Altcoins, Token, DeFi, Web3, NFT, Stablecoin, Exchange, Mining, Whale/Wallet ট্রান্সফার, Crypto Hack/Scam, ETF, SEC/CFTC রেগুলেশন) অথবা ক্রিপ্টো বাজারে প্রভাব ফেলে এমন মার্কিন অর্থনীতি/ফেডারেল রিজার্ভ/সুদের হার/মুদ্রাস্ফীতি/শুল্ক/ডলার বা ট্রাম্পের ক্রিপ্টো/অর্থনৈতিক বক্তব্য সম্পর্কিত হয়, তবে "is_crypto": true দাও (ছোট বা মাইনর ক্রিপ্টো খবর হলেও true)। কিন্তু খবরটি যদি ক্রিপ্টো বা অর্থনীতির সাথে সম্পূর্ণ সম্পর্কহীন সাধারণ রাজনীতি/নির্বাচন (যেমন ব্রাজিল বা অন্য দেশের সাধারণ নির্বাচন, পুলিশ মোতায়েন, খেলাধুলা, বিনোদন বা ক্রিপ্টো-বিহীন সাধারণ প্রযুক্তি) হয়, তবে "is_crypto": false দাও।
+- is_crypto যদি false হয়, তবে headline_bn খালি স্ট্রিং "" রাখো।
+- is_crypto যদি true হয়, তবে headline_bn ঠিক {min_chars}–{max_chars} অক্ষরের হবে (বাংলা) এবং খবরের মূল ঘটনা সংক্ষেপে বলবে (যদি কোনো অর্থনৈতিক ইভেন্ট, সুদের হার বা গুরুত্বপূর্ণ ভাষণের খবর হয়, তবে মূল কথার পাশাপাশি মার্কেটে বুলিশ বা বিয়ারিশ কী প্রভাব পড়তে পারে তাও উল্লেখ করবে)।
 - sentiment: বাজার/খবরের প্রভাব অনুযায়ী শুধু একটি — "BULLISH", "BEARISH" বা "NEUTRAL"।
 - emoji: খবরের বিষয়ের সাথে মানানসই একটি ইমোজি।
 
 শুধু এবং শুধু নিচের JSON ফরম্যাটে উত্তর দাও, কোনো অতিরিক্ত লেখা, মার্কডাউন বা কোড-ফেন্স নয়:
-{{"sentiment": "BULLISH|BEARISH|NEUTRAL", "headline_bn": "...", "emoji": "..."}}
+{{"is_crypto": true, "sentiment": "BULLISH|BEARISH|NEUTRAL", "headline_bn": "...", "emoji": "..."}}
 """
 
 _REWRITE_INSTRUCTION = """
@@ -1013,6 +1014,10 @@ def _parse_headline_json(raw: str) -> Optional[Dict[str, Any]]:
     if not isinstance(data, dict):
         return None
 
+    is_crypto_raw = data.get("is_crypto", True)
+    if is_crypto_raw is False or str(is_crypto_raw).strip().lower() == "false":
+        return {"is_crypto": False, "sentiment": "NEUTRAL", "headline_bn": "", "emoji": "⚪"}
+
     headline = str(data.get("headline_bn", "")).strip()
     if not headline:
         return None
@@ -1025,6 +1030,7 @@ def _parse_headline_json(raw: str) -> Optional[Dict[str, Any]]:
         # (যেমন পুরো লেখা) ক্যাপশনে যেন না বসে
         emoji = SENTIMENT_EMOJI[sentiment]
     return {
+        "is_crypto": True,
         "sentiment": sentiment,
         "headline_bn": headline,
         "emoji": emoji,
@@ -1082,6 +1088,8 @@ def generate_bengali_headline(item: NewsItem) -> Tuple[str, Optional[Dict[str, A
             if parsed is None:
                 log.info("Gemini JSON পারলাম না (মডেল=%s) — আবার চেষ্টা", model_name)
                 continue
+            if not parsed.get("is_crypto", True):
+                return "not_crypto", None
 
             n = len(parsed["headline_bn"])
             if Config.HEADLINE_MIN_CHARS <= n <= Config.HEADLINE_MAX_CHARS:
@@ -1442,6 +1450,12 @@ def handle_single_item(conn, item: NewsItem) -> None:
         # Gemini সম্পূর্ণ ব্যর্থ — কিছু রেকর্ড করা হয় না, যাতে পরের সাইকেলে
         # (ফ্রেশ থাকা অবধি) আবার চেষ্টা হয়
         log.warning("Gemini ব্যর্থ — আইটেম এবার স্কিপ: %s", item.link)
+        return
+
+    if status == "not_crypto":
+        # নন-ক্রিপ্টো খবর (যেমন সাধারণ নির্বাচন/রাজনীতি) → posted=0 হিসেবে সেভ করে বাদ
+        record_item(conn, item, item.title or "(নন-ক্রিপ্টো খবর)", posted=0)
+        log.info("নন-ক্রিপ্টো খবর — বাদ [%s]: %s", item.source_name, item.title[:80])
         return
 
     if status == "format_failed":
@@ -1973,10 +1987,10 @@ def fetch_economic_events(force: bool = False) -> List[dict]:
             log.warning("ইভেন্ট ক্যালেন্ডার ফেচ ব্যর্থ (%s): %s", url, e)
 
     horizon = now + Config.EVENT_HORIZON_HOURS * 3600
-    # ১৫ মিনিটের আগে শুরু হওয়া ইভেন্ট আর নেওয়া হয় না (শুরুর আগে বট বন্ধ ছিল);
-    # তবে ১৫ মিনিটের মধ্যে শুরু হওয়াটা নেওয়া হয় — স্টেজ-লজিক সেটা সামলাবে।
+    # গত ১৫ মিনিটের মধ্যে শুরু হওয়া বা আসন্ন ইভেন্ট রাখা হয় যাতে T+0 ইনস্ট্যান্ট
+    # পোলিংয়ের সময় ইভেন্টটি লিস্ট থেকে হারিয়ে না যায়।
     events = [e for e in merged.values()
-              if now - Config.EVENT_IMPACT_DELAY * 60 <= e["dateline"] <= horizon]
+              if now - 900 <= e["dateline"] <= horizon]
     events.sort(key=lambda e: e["dateline"])
     if events or merged:
         cache["fetched_at"] = now          # ব্যর্থ হলে পুরনো ক্যাশেই থাকে
@@ -1995,19 +2009,22 @@ _EVENT_PRE_PROMPT = """তুমি একজন ক্রিপ্টো মা
 (৩) নিশ্চয়তার ভাষা নয় — "হতে পারে/সম্ভাবনা" ধরনের শব্দ।
 শুধু বাংলা প্লেইন টেক্সট (markdown নয়), সর্বোচ্চ ৪০০ অক্ষর।"""
 
-_EVENT_IMPACT_PROMPT = """তুমি ক্রিপ্টো মার্কেট অ্যানালিস্ট। "{name}" ইভেন্ট এইমাত্র শেষ হয়েছে।
-আসল ফল: {actual} | পূর্বাভাস: {forecast} | পূর্বের: {previous}
-ইভেন্টের আগে থেকে এখন: BTC {btc_line} | ETH {eth_line}
+_EVENT_IMPACT_PROMPT = """তুমি একজন অভিজ্ঞ ক্রিপ্টো মার্কেট অ্যানালিস্ট। "{name}" ইভেন্টের মূল ডাটা/ঘোষণা এইমাত্র পাবলিশ হয়েছে।
+আসল ফল (Actual): {actual} | পূর্বাভাস (Forecast): {forecast} | পূর্বের (Previous): {previous}
+ইভেন্টের আগে থেকে এখন তাৎক্ষণিক দাম: BTC {btc_line} | ETH {eth_line}
 
-১২০-১৮০ অক্ষরের বাংলা সংক্ষেপ লেখো:
-(১) ফল পূর্বাভাসের সাথে তুলনা করে এক লাইনে কী এলো;
-(২) বাজার কেন এভাবে রিঅ্যাক্ট করলো;
-(৩) সম্ভাব্য পরবর্তী প্রভাব। শুধু বাংলা প্লেইন টেক্সট, সর্বোচ্চ ৪০০ অক্ষর।"""
+নিচের নিয়ম মেনে উত্তর দাও:
+১) প্রথম লাইনে শুধুমাত্র একটি শব্দে ক্রিপ্টো মার্কেটের ওপর এই ঘোষণার তাৎক্ষণিক প্রভাব লেখো: BULLISH অথবা BEARISH অথবা VOLATILE
+২) দ্বিতীয় লাইন থেকে ১৬০-২৬০ অক্ষরের সহজ ও স্পষ্ট বাংলায় লেখো:
+   - ইভেন্টে মূল কী ঘোষণা এলো (যেমন সুদের হার বা ডাটা কমেছে নাকি বেড়েছে, পূর্বাভাসের তুলনায় কেমন হলো);
+   - এই কারণে ক্রিপ্টো মার্কেটে এখন বুলিশ নাকি বিয়ারিশ ঘটতে পারে বা ঘটবে;
+   - মার্কেটে এই মুহূর্তে কী হচ্ছে এবং আগামীতে কী হতে পারে।
+শুধু বাংলা প্লেইন টেক্সট (markdown নয়), সর্বোচ্চ ৪৫০ অক্ষর।"""
 
 
 def _event_gemini_text(prompt: str) -> Optional[str]:
     """জেমিনি দিয়ে ইভেন্ট-বিশ্লেষণ লেখায় (প্রাইমারি → ফলব্যাক মডেল)।
-    সময় সীমিত (T−৬০/ইমপ্যাক্ট) বলে কোনো অতিরিক্ত delay নেই; ব্যর্থ হলে
+    সময় সীমিত (T−৬০/ইনস্ট্যান্ট ইমপ্যাক্ট) বলে কোনো অতিরিক্ত delay নেই; ব্যর্থ হলে
     None — কলার টেমপ্লেট ফলব্যাক ব্যবহার করবে, অ্যালার্ট কখনো আটকবে না।"""
     models = [Config.GEMINI_TEXT_MODEL]
     if Config.GEMINI_FALLBACK_MODEL and Config.GEMINI_FALLBACK_MODEL != Config.GEMINI_TEXT_MODEL:
@@ -2022,6 +2039,35 @@ def _event_gemini_text(prompt: str) -> Optional[str]:
     return None
 
 
+def _parse_impact_response(raw_text: Optional[str], before: Dict[str, Optional[float]],
+                           after: Dict[str, Optional[float]]) -> Tuple[str, Optional[str]]:
+    """Gemini-র উত্তর থেকে প্রথম লাইনের মার্কেট সিগন্যাল (BULLISH/BEARISH/VOLATILE)
+    এবং বাংলা বিশ্লেষণ আলাদা করে।"""
+    default_sig = "VOLATILE"
+    b_btc, a_btc = before.get("BTC"), after.get("BTC")
+    if b_btc and a_btc and b_btc > 0:
+        pct = (a_btc - b_btc) / b_btc * 100.0
+        if pct >= 0.15:
+            default_sig = "BULLISH"
+        elif pct <= -0.15:
+            default_sig = "BEARISH"
+    if not raw_text:
+        return default_sig, None
+    lines = [ln.strip() for ln in raw_text.strip().splitlines() if ln.strip()]
+    if not lines:
+        return default_sig, None
+    first_upper = lines[0].upper()
+    sig = default_sig
+    body_lines = lines
+    for candidate in ("BULLISH", "BEARISH", "VOLATILE"):
+        if candidate in first_upper and len(lines[0]) <= 30:
+            sig = candidate
+            body_lines = lines[1:] if len(lines) > 1 else lines
+            break
+    body = " ".join(body_lines).strip()
+    return sig, (body if len(body) >= 30 else raw_text.strip())
+
+
 def _build_pre_event_msg(ev: dict, analysis: str, bd_time: str) -> str:
     """T−৬০ বার্তা (HTML) — নাম, বাংলাদেশ সময়, forecast/previous, বিশ্লেষণ।"""
     return (
@@ -2031,21 +2077,29 @@ def _build_pre_event_msg(ev: dict, analysis: str, bd_time: str) -> str:
         " | 📌 পূর্বাভাস: " + html_escape(ev["forecast"] or "—") +
         " | পূর্বের: " + html_escape(ev["previous"] or "—") + "\n\n"
         + analysis + "\n\n"
-        "⚠️ ইভেন্ট শেষ হলে ফলাফল ও মার্কেট-ইমপ্যাক্ট এখানেই পোস্ট হবে।"
+        "⚠️ ইভেন্ট শুরু হওয়া মাত্রই ইনস্ট্যান্ট ফলাফল ও মার্কেট-ইমপ্যাক্ট এখানেই পোস্ট হবে।"
     )
 
 
 def _build_impact_event_msg(ev: dict, analysis: str,
                             before: Dict[str, Optional[float]],
-                            after: Dict[str, Optional[float]]) -> str:
-    """ইভেন্ট-পরের ফলাফল বার্তা (HTML): আসল ফল + BTC/ETH % পরিবর্তন + বিশ্লেষণ।"""
-    lines = ["✅ <b>" + html_escape(ev["name"]) + " — ফলাফল ও মার্কেট-ইমপ্যাক্ট</b>"]
-    if ev.get("actual"):
+                            after: Dict[str, Optional[float]],
+                            signal: str = "VOLATILE") -> str:
+    """ইভেন্টের সাথে সাথে ইনস্ট্যান্ট ফলাফল ও মার্কেট-ইমপ্যাক্ট বার্তা (HTML)।"""
+    sig_map = {
+        "BULLISH": "BULLISH 🟢 (বুলিশ ইমপ্যাক্ট)",
+        "BEARISH": "BEARISH 🔴 (বিয়ারিশ ইমপ্যাক্ট)",
+        "VOLATILE": "VOLATILE ⚡ (উভয়মুখী মুভমেন্ট)",
+    }
+    sig_label = sig_map.get(signal, sig_map["VOLATILE"])
+    lines = ["🚨 <b>ইনস্ট্যান্ট ইভেন্ট আপডেট: " + html_escape(ev["name"]) + "</b>"]
+    if ev.get("actual") or ev.get("forecast") or ev.get("previous"):
         lines.append(
-            "📌 আসল: <b>" + html_escape(ev["actual"]) + "</b>"
-            " | পূর্বাভাস: " + html_escape(ev["forecast"] or "—") +
-            " | পূর্বের: " + html_escape(ev["previous"] or "—")
+            "📌 আসল ফলাফল: <b>" + html_escape(ev.get("actual") or "সদ্য প্রকাশিত") + "</b>"
+            " | পূর্বাভাস: " + html_escape(ev.get("forecast") or "—") +
+            " | পূর্বের: " + html_escape(ev.get("previous") or "—")
         )
+    lines.append("📊 <b>MARKET IMPACT:</b> <b>" + sig_label + "</b>")
     for tag in ("BTC", "ETH"):
         b, a = before.get(tag), after.get(tag)
         if a is None:
@@ -2053,11 +2107,14 @@ def _build_impact_event_msg(ev: dict, analysis: str,
         if b is not None and b > 0:
             pct = (a - b) / b * 100.0
             arrow = "📈" if pct >= 0 else "📉"
-            lines.append(f"{arrow} {tag}: {pct:+.2f}% (${b:,.0f} → ${a:,.0f})")
+            lines.append(f"{arrow} <b>{tag}:</b> {pct:+.2f}% (${b:,.0f} → ${a:,.0f})")
         else:
-            lines.append(f"🔹 {tag} এখন: ${a:,.0f}")
+            lines.append(f"🔹 <b>{tag} এখন:</b> ${a:,.0f}")
     lines.append("")
+    lines.append("🧠 <b>মার্কেটে এখন কী হচ্ছে ও সামনে কী হতে পারে:</b>")
     lines.append(html_escape(analysis))
+    lines.append("")
+    lines.append(f'🔔 <b>Follow: <a href="{html_escape(Config.FOLLOW_CHANNEL_URL)}">CRYPTO UPDATE</a></b>')
     return "\n".join(lines)
 
 
@@ -2072,7 +2129,7 @@ def _row_dict(cur) -> dict:
 
 def _get_or_create_event_row(conn, ev: dict):
     """economic_events-এ ইভেন্টের রো (না থাকলে তৈরি) ফেরত দেয়।
-    ইভেন্ট আগেই শেষ+EVENT_IMPACT_DELAY হয়ে গেলে (বট বন্ধ ছিল) নীরবে stage=3 —
+    ইভেন্ট আগেই ৫ মিনিটের বেশি পুরনো হয়ে গেলে (বট বন্ধ ছিল) নীরবে stage=3 —
     বট চালু হওয়ামাত্র পুরনো ইভেন্টের অ্যালার্ট ফেলে দেওয়া বন্ধ।"""
     key = f"{ev['ff_id']}_{ev['dateline']}"
     cur = conn.execute(
@@ -2081,7 +2138,7 @@ def _get_or_create_event_row(conn, ev: dict):
     row = _row_dict(cur)
     if row is None:
         start_stage = 3 if time.time() >= (
-            ev["dateline"] + Config.EVENT_IMPACT_DELAY * 60
+            ev["dateline"] + max(300, Config.EVENT_IMPACT_DELAY * 60)
         ) else 0
         conn.execute(
             "INSERT INTO economic_events (event_key, name, event_time_utc, stage,"
@@ -2169,16 +2226,35 @@ def _do_t30_update(conn, ev: dict) -> None:
 
 
 def _do_impact(conn, ev: dict) -> None:
-    """ইভেন্ট-পরের ধাপ: আসল ফল + BTC/ETH % পরিবর্তন বিশ্লেষণ পোস্ট → আনপিন।
-    পোস্ট ব্যর্থ হলে স্টেজ অপরিবর্তিত — পরের সাইকেলে আবার চেষ্টা।"""
+    """ইভেন্টের সময় হওয়া মাত্রই (T+0, যেমন ঠিক ৬:৩০ মিনিটে) ইনস্ট্যান্ট ফলাফল
+    ও মার্কেট-ইমপ্যাক্ট (বুলিশ/বিয়ারিশ + মার্কেটে এখন কী হচ্ছে ও সামনে কী হতে পারে)
+    পোস্ট → আগের পিন আনপিন।
+    যদি সংখ্যাভিত্তিক ইভেন্ট হয় এবং Forex Factory-তে ওই মুহূর্তে Actual উঠতে কয়েক
+    সেকেন্ড বাকি থাকে, তবে সর্বোচ্চ ৯০ সেকেন্ড পর্যন্ত প্রতি ১০ সেকেন্ডে লাইভ চেক করে
+    ডাটা আসামাত্র সাথে সাথে পোস্ট করে দেয়।"""
     key = f"{ev['ff_id']}_{ev['dateline']}"
     row = _reload_event_row(conn, key)
-    # আসল ফল ক্যালেন্ডার ক্যাশে এখনো না এসে থাকতে পারে — একবার বাধ্যতামূলক রিফ্রেশ
+    if row is None or int(row["stage"]) >= 3:
+        return
+
+    # আসল ফল ক্যালেন্ডার ক্যাশে এখনো না এসে থাকতে পারে — বাধ্যতামূলক লাইভ রিফ্রেশ
     if not ev.get("actual"):
         for e2 in fetch_economic_events(force=True):
             if (e2["ff_id"], e2["dateline"]) == (ev["ff_id"], ev["dateline"]):
                 ev = e2
                 break
+
+    # সংখ্যাভিত্তিক ইভেন্টে (যেখানে forecast বা previous আছে) ইভেন্টের ঠিক ০-৯০ সেকেন্ডের
+    # মধ্যে যদি এখনো actual না আসে, তবে ১০ সেকেন্ড পর আবার পোল করবে যাতে আসল সংখ্যা
+    # আসা মাত্রই ইনস্ট্যান্ট পোস্ট যায়।
+    has_numeric_expectation = bool(ev.get("forecast") or ev.get("previous"))
+    elapsed_since_event = time.time() - float(ev["dateline"])
+    if (has_numeric_expectation and not ev.get("actual")
+            and 0 <= elapsed_since_event < Config.EVENT_ACTUAL_WAIT_MAX_SECONDS):
+        log.info("ইভেন্ট শুরু হয়েছে [%s] — লাইভ ফলাফল (Actual) প্রকাশের অপেক্ষায় (%.0fs)...",
+                 ev["name"], elapsed_since_event)
+        return
+
     before = {"BTC": row["pre_btc"], "ETH": row["pre_eth"]}
     after = {"BTC": fetch_spot_price("BTCUSDT"),
              "ETH": fetch_spot_price("ETHUSDT")}
@@ -2186,23 +2262,23 @@ def _do_impact(conn, ev: dict) -> None:
     def _delta_line(tag: str) -> str:
         b, a = before.get(tag), after.get(tag)
         if b is None or a is None or b <= 0:
-            return "দাম পাওয়া যায়নি"
+            return f"${a:,.0f}" if a else "দাম পাওয়া যায়নি"
         return f"{(a - b) / b * 100.0:+.2f}% (${b:,.0f} → ${a:,.0f})"
 
     prompt = _EVENT_IMPACT_PROMPT.format(
-        name=ev["name"], actual=ev.get("actual") or "(ঘোষণা হয়নি)",
+        name=ev["name"], actual=ev.get("actual") or "সদ্য প্রকাশিত/ভাষণ চলমান",
         forecast=ev.get("forecast") or "—", previous=ev.get("previous") or "—",
         btc_line=_delta_line("BTC"), eth_line=_delta_line("ETH"),
     )
-    analysis = _event_gemini_text(prompt)
+    raw_ai = _event_gemini_text(prompt)
+    signal, analysis = _parse_impact_response(raw_ai, before, after)
     if analysis is None:
-        analysis = ("ইভেন্টের ফলাফলের সাথে সাথে বিটকয়েন ও ইথেরিয়ামের দামে "
-                    "তাৎক্ষণিক প্রতিক্রিয়া দেখা গেছে — উপরের শতাংশগুলো "
-                    "ইভেন্টের আগে-পরের তুলনা। পরবর্তী কয়েক ঘণ্টা বাজার "
-                    "পর্যবেক্ষণে থাকুন।")
-    msg = _build_impact_event_msg(ev, analysis, before, after)
+        analysis = ("ইভেন্ট প্রকাশের সাথে সাথে ক্রিপ্টো মার্কেটে তাৎক্ষণিক মুভমেন্ট শুরু হয়েছে। "
+                    "উপরের পরিসংখ্যান অনুযায়ী বিটকয়েন ও ইথেরিয়ামের দামে প্রতিক্রিয়া দেখা যাচ্ছে এবং "
+                    "আগামী কয়েক ঘণ্টায় বাজারে উচ্চ ভোলাটিলিটি বজায় থাকতে পারে।")
+    msg = _build_impact_event_msg(ev, analysis, before, after, signal=signal)
     if not send_text_message(msg, parse_mode="HTML"):
-        log.warning("ইভেন্ট ইমপ্যাক্ট পোস্ট যায়নি — আবার চেষ্টা হবে [%s]",
+        log.warning("ইভেন্ট ইমপ্যাক্ট পোস্ট যায়নি — পরের লুপেই আবার চেষ্টা হবে [%s]",
                     ev["name"])
         return
     # পোস্ট সফল → আগের পিন করা অ্যালার্ট আনপিন
@@ -2213,18 +2289,20 @@ def _do_impact(conn, ev: dict) -> None:
         (ev.get("actual") or "", key),
     )
     conn.commit()
-    log.info("ইভেন্ট ফলাফল+ইমপ্যাক্ট পোস্ট ও আনপিন ✅ [%s]", ev["name"])
+    log.info("🚨 ইনস্ট্যান্ট ইভেন্ট ফলাফল+ইমপ্যাক্ট পোস্ট ও আনপিন ✅ [%s | %s]",
+             ev["name"], signal)
 
 
-def check_economic_events(conn) -> None:
-    """প্রতি নিউজ-সাইকেলে কল হয় — আসন্ন ইভেন্টের ধাপ চালায়:
-    T−৬০ → পাঠাও+পিন; T−৩০ → একই মেসেজ এডিট+রি-পিন; T+EVENT_IMPACT_DELAY →
-    ফলাফল-পোস্ট + আনপিন। প্রতিটি ধাপ economic_events.stage-তে সেভ থাকে বলে
-    রিস্টার্ট/ডিপ্লয়েও কোনো ধাপ দুবার বা বাদ যায় না।"""
+def check_economic_events(conn) -> bool:
+    """আসন্ন ইভেন্টের ধাপ চালায়:
+    T−৬০ → পাঠাও+পিন; T−৩০ → একই মেসেজ এডিট+রি-পিন; T+০ (ইভেন্টের সাথে সাথে) →
+    ইনস্ট্যান্ট ফলাফল+মার্কেট ইমপ্যাক্ট পোস্ট ও আনপিন।
+    রিটার্ন: কোনো ইভেন্টের ইমপ্যাক্ট উইন্ডো চলমান থাকলে True (তখন ১০ সেকেন্ডে ফাস্ট পোলিং হবে)।"""
     events = fetch_economic_events()
     if not events:
-        return
+        return False
     now = time.time()
+    fast_poll_needed = False
     for ev in events:
         try:
             row = _get_or_create_event_row(conn, ev)
@@ -2234,14 +2312,31 @@ def check_economic_events(conn) -> None:
             t1 = ev["dateline"] - Config.EVENT_ALERT_LEAD_1 * 60
             t2 = ev["dateline"] - Config.EVENT_ALERT_LEAD_2 * 60
             t3 = ev["dateline"] + Config.EVENT_IMPACT_DELAY * 60
+            if abs(now - ev["dateline"]) <= 180:
+                fast_poll_needed = True
             if now >= t3:
-                _do_impact(conn, ev)               # ইভেন্ট শেষ — ফলাফল + আনপিন
-            elif now >= t2:
+                _do_impact(conn, ev)               # ইভেন্ট শুরু হওয়া মাত্রই ইনস্ট্যান্ট ফলাফল + আনপিন
+            elif now >= t2 and stage < 2:
                 _do_t30_update(conn, ev)            # (দরকার হলে T-60 নিজে পাঠায়)
             elif now >= t1 and stage < 1:
                 _do_pre_alert(conn, ev)
         except Exception as e:
             log.exception("ইভেন্ট প্রসেস এক্সেপশন (%s): %s", ev.get("name"), e)
+    return fast_poll_needed
+
+
+def event_alert_loop() -> None:
+    """ইকোনমিক ইভেন্টের জন্য আলাদা ডেডিকেটেড daemon থ্রেড (নিজস্ব DB কানেকশন)।
+    ধীরগতির নিউজ লুপের জন্য অপেক্ষা না করে প্রতি ১৫ সেকেন্ডে (এবং ইভেন্টের সময়
+    প্রতি ১০ সেকেন্ডে) চেক করে, যাতে ৬:৩০-এর ইভেন্ট ঠিক ৬:৩০-এই ইনস্ট্যান্ট পোস্ট হয়।"""
+    conn = get_db()
+    while True:
+        try:
+            fast = check_economic_events(conn)
+            time.sleep(5 if fast else Config.EVENT_LOOP_SLEEP_SECONDS)
+        except Exception:
+            log.exception("event_alert_loop-এ অপ্রত্যাশিত এক্সেপশন — লুপ চালিয়ে যাচ্ছি")
+            time.sleep(15)
 
 
 # =============================================================================
@@ -2601,6 +2696,13 @@ def main() -> None:
         log.info("প্রাইস অ্যালার্ট থ্রেড শুরু হয়েছে (daemon)")
     else:
         log.info("প্রাইস অ্যালার্ট বন্ধ আছে (ENABLE_PRICE_ALERTS=False)")
+
+    # ইকোনমিক ইভেন্ট অ্যালার্ট — আলাদা ফাস্ট ডাইমন থ্রেড (যাতে ৬:৩০-এর ইভেন্ট ঠিক ৬:৩০-এই ইনস্ট্যান্ট যায়)
+    t_ev = threading.Thread(
+        target=event_alert_loop, daemon=True, name="event-alert"
+    )
+    t_ev.start()
+    log.info("ইকোনমিক ইভেন্ট ইনস্ট্যান্ট অ্যালার্ট থ্রেড শুরু হয়েছে (daemon)")
 
     # সিড টেস্ট সম্পূর্ণ বন্ধ — main() থেকে কখনো কল হবে না
     if Config.ENABLE_SEED_TEST:
