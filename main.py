@@ -228,6 +228,15 @@ class Config:
     # False = না (শুধু BULLISH/BEARISH; NEUTRAL DB-তে posted=0 সেভ হয়)
     POST_NEUTRAL = True
 
+    # ---- ন্যাচারাল (NEUTRAL) নিউজের অটো-ডিলিট ----
+    # ন্যাচারাল পোস্ট হলে বট নিজেই message_id+সময় ট্র্যাক করে, তারপর
+    # NATURAL_DELETE_AFTER_SECONDS পেরোলে সেটি ডিলিট করে দেয়।
+    # শুধুমাত্র ন্যাচারাল পোস্ট — BULLISH/BEARISH নিউজ, ইভেন্ট ও প্রাইস
+    # অ্যালার্ট কখনো ডিলিট হয় না।
+    NATURAL_DELETE_ENABLED = True
+    NATURAL_DELETE_AFTER_SECONDS = 3600   # পোস্টের ১ ঘণ্টা পর ডিলিট
+    NATURAL_DELETE_MAX_ATTEMPTS = 3       # মেসেজ আগেই গেলে ৩ চেষ্টার পর বন্ধ
+
     # বাংলা হেডলাইনের দৈর্ঘ্য সীমা (অক্ষর)
     HEADLINE_MIN_CHARS = 100
     HEADLINE_MAX_CHARS = 150
@@ -394,7 +403,7 @@ def get_db():
 
 
 def _init_schema(conn) -> None:
-    """স্পেসিফিকেশনের হুবহু স্কিমা অনুযায়ী ৫টা টেবিল তৈরি (idempotent)।"""
+    """স্পেসিফিকেশনের হুবহু স্কিমা অনুযায়ী ৬টা টেবিল তৈরি (idempotent)।"""
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS posted_items (
@@ -439,6 +448,14 @@ def _init_schema(conn) -> None:
             previous TEXT DEFAULT '',
             actual TEXT DEFAULT '',
             currency TEXT DEFAULT ''
+        );
+
+        CREATE TABLE IF NOT EXISTS natural_posts (
+            message_id INTEGER PRIMARY KEY,
+            posted_at REAL NOT NULL,
+            link TEXT DEFAULT '',
+            deleted INTEGER NOT NULL DEFAULT 0,
+            attempts INTEGER NOT NULL DEFAULT 0
         );
         """
     )
@@ -529,15 +546,21 @@ def _telegram_api(method: str, data: dict = None, files: dict = None,
         return None if want_result else False
 
 
-def send_text_message(text: str, parse_mode: str = "HTML") -> bool:
-    """শুধু টেক্সট মেসেজ পাঠায় (ছবি ব্যর্থ হলে fallback)।
+def send_text_message(text: str, parse_mode: str = "HTML") -> Optional[int]:
+    """শুধু টেক্সট মেসেজ পাঠায়, সফল হলে message_id ফেরত (ন্যাচারাল পোস্টের
+    অটো-ডিলিটে ওই id লাগে); ব্যর্থ হলে None — কলার truthiness দিয়েই
+    সিদ্ধান্ত নেয় (None অসত্য, id > 0 সত্য)।
     লিংক-প্রিভিউ বন্ধ রাখা হয় যাতে ক্যাপশনের ফরম্যাটে অতিরিক্ত কোনো ব্লক না আসে।"""
-    return _telegram_api("sendMessage", data={
+    res = _telegram_api("sendMessage", data={
         "chat_id": TELEGRAM_CHANNEL_ID,
         "text": text,
         "parse_mode": parse_mode,
         "disable_web_page_preview": "true",
-    })
+    }, want_result=True)
+    try:
+        return int(res["message_id"])
+    except Exception:
+        return None
 
 
 def send_text_message_id(text: str, parse_mode: str = "HTML") -> Optional[int]:
@@ -586,13 +609,26 @@ def edit_text_message(message_id: int, text: str, parse_mode: str = "HTML") -> b
     }))
 
 
+def delete_message(message_id: int) -> bool:
+    """চ্যানেলের মেসেজ ডিলিট করে (ন্যাচারাল নিউজের অটো-ডিলিট) —
+    বটকে 'Delete messages' অ্যাডমিন অনুমতি লাগে।
+    মেসেজ আগে থেকেই মুছে গেলে টেলিগ্রাম ব্যর্থ করে — কলার সেটা
+    attempts-কাউন্টারে ধরে ৩ চেষ্টার পর আর চেষ্টা করে না।"""
+    return bool(_telegram_api("deleteMessage", data={
+        "chat_id": TELEGRAM_CHANNEL_ID,
+        "message_id": int(message_id),
+    }))
+
+
 def send_single_photo(image_url: str = None, photo_bytes: bytes = None,
                       caption: str = "", parse_mode: str = "HTML",
                       filename: str = "photo.png",
-                      content_type: str = "image/png") -> bool:
+                      content_type: str = "image/png") -> Optional[int]:
     """সবসময় মাত্র ১টা ছবি পাঠায় — কখনো sendMediaGroup/অ্যালবাম নয়।
     image_url থাকলে Telegram নিজে ওই URL থেকে ছবি নেয় (সোর্সের ছবি);
-    photo_bytes থাকলে আপলোড করা হয় (ডাউনলোড করা সোর্স ছবি, AI ছবি বা প্রাইস কার্ড)।"""
+    photo_bytes থাকলে আপলোড করা হয় (ডাউনলোড করা সোর্স ছবি, AI ছবি বা প্রাইস কার্ড)।
+    সফল হলে message_id ফেরত (ন্যাচারাল-ডিলিট ট্র্যাকিং), ব্যর্থ হলে None —
+    কলার truthiness দিয়েই চলে (None অসত্য, id > 0 সত্য)।"""
     data = {
         "chat_id": TELEGRAM_CHANNEL_ID,
         "parse_mode": parse_mode,
@@ -605,8 +641,12 @@ def send_single_photo(image_url: str = None, photo_bytes: bytes = None,
     elif photo_bytes:
         files = {"photo": (filename, photo_bytes, content_type)}
     else:
-        return False
-    return _telegram_api("sendPhoto", data=data, files=files)
+        return None
+    res = _telegram_api("sendPhoto", data=data, files=files, want_result=True)
+    try:
+        return int(res["message_id"])
+    except Exception:
+        return None
 
 
 # =============================================================================
@@ -1347,8 +1387,9 @@ def _download_image_bytes(url: str) -> Optional[Tuple[bytes, str, str]]:
 
 
 def post_news_item(item: NewsItem, headline: str, sentiment: str,
-                   emoji: str) -> bool:
-    """ক্যাপশন বানিয়ে ছবি/টেক্সট পাথে চ্যানেলে পোস্ট করে সফল হলে True।
+                   emoji: str) -> Optional[int]:
+    """ক্যাপশন বানিয়ে ছবি/টেক্সট পাথে চ্যানেলে পোস্ট করে — সফল হলে
+    message_id ফেরত (ন্যাচারাল পোস্টের অটো-ডিলিটে লাগে), ব্যর্থ হলে None।
     ধাপ: ① সোর্সের প্রথম ছবি ডাউনলোড করে ৪:৩ ফিট → ② ফেল হলে AI ছবি (৪:৩)
     → ③ শুধু টেক্সট। সব ছবিই ঠিক ৪:৩ রেশিওতে যায়।"""
     caption = build_news_caption(headline, sentiment, emoji, item)
@@ -1361,19 +1402,21 @@ def post_news_item(item: NewsItem, headline: str, sentiment: str,
         downloaded = _download_image_bytes(source_images[0])
         if downloaded:
             img_bytes, img_mime, img_name = downloaded
-            if send_single_photo(photo_bytes=img_bytes, filename=img_name,
-                                 content_type=img_mime, caption=caption,
-                                 parse_mode="HTML"):
-                return True
+            mid = send_single_photo(photo_bytes=img_bytes, filename=img_name,
+                                    content_type=img_mime, caption=caption,
+                                    parse_mode="HTML")
+            if mid:
+                return mid
         log.warning("সোর্স ছবি ডাউনলোড/পাঠানো ব্যর্থ — AI ছবির দিকে যাচ্ছি")
 
     # ২) AI ছবি
     if Config.ENABLE_AI_IMAGE:
         ai_bytes = generate_ai_image_bytes(item, headline)
         if ai_bytes:
-            if send_single_photo(photo_bytes=ai_bytes, caption=caption,
-                                 parse_mode="HTML", filename="ai_news.png"):
-                return True
+            mid = send_single_photo(photo_bytes=ai_bytes, caption=caption,
+                                    parse_mode="HTML", filename="ai_news.png")
+            if mid:
+                return mid
             log.warning("AI ছবি পাঠানো যায়নি — শুধু টেক্সটে যাচ্ছি")
 
     # ৩) শুধু টেক্সট (সর্বশেষ fallback)
@@ -1426,10 +1469,14 @@ def handle_single_item(conn, item: NewsItem) -> None:
         log.info("সেমান্টিক ডুপ্লিকেট — বাদ: %s", item.link)
         return
 
-    # পোস্ট (ছবি নির্বাচন ও fallback সহ)
-    ok = post_news_item(item, headline, data["sentiment"], data["emoji"])
-    if ok:
+    # পোস্ট (ছবি নির্বাচন ও fallback সহ) — সফল হলে message_id ফেরত
+    mid = post_news_item(item, headline, data["sentiment"], data["emoji"])
+    if mid:
         record_item(conn, item, headline, posted=1)
+        # ন্যাচারাল (NEUTRAL) পোস্ট হলে বট নিজে ট্র্যাক করে রাখে —
+        # ১ ঘণ্টা পর সেটি অটো-ডিলিট হবে (delete_expired_natural_posts)
+        if data["sentiment"] == "NEUTRAL":
+            track_natural_post(conn, mid, link=item.link)
         log.info("✅ পোস্ট সফল [%s]: %s", item.source_name, headline[:80])
     else:
         # পোস্ট ব্যর্থ (Telegram সমস্যা) — রেকর্ড করা হয় না, পরের সাইকেলে
@@ -1483,6 +1530,68 @@ def run_cycle(conn) -> None:
 
         # প্রতিটা পোস্টের মাঝে delay — টেলিগ্রাম রেটলিমিট মানার জন্য
         time.sleep(Config.POST_DELAY_SECONDS)
+
+
+# =============================================================================
+# ৪.১০ ন্যাচারাল (NEUTRAL) নিউজের অটো-ডিলিট (প্রতি ঘণ্টার পর পরিষ্কার)
+# =============================================================================
+def track_natural_post(conn, message_id, link: str = "") -> None:
+    """ন্যাচারাল পোস্টের message_id + সময় DB-তে সেভ — পরে অটো-ডিলিটে লাগবে।
+    বট নিজেই যা পাঠিয়েছে তার id ধরে রাখে; BULLISH/BEARISH, ইভেন্ট ও প্রাইস
+    অ্যালার্ট কখনো ট্র্যাক হয় না।"""
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO natural_posts"
+            " (message_id, posted_at, link, deleted, attempts) VALUES (?,?,?,0,0)",
+            (int(message_id), time.time(), link or ""),
+        )
+        conn.commit()
+    except Exception as e:
+        log.warning("ন্যাচারাল-পোস্ট ট্র্যাক সেভ ব্যর্থ: %s", e)
+
+
+def delete_expired_natural_posts(conn) -> None:
+    """প্রতি মূল-সাইকেলে কল হয় — ১ ঘণ্টা পুরনো ন্যাচারাল পোস্টগুলো
+    বট নিজেই ডিলিট করে দেয় (Config.NATURAL_DELETE_AFTER_SECONDS)।
+    শুধুমাত্র natural_posts-এ ট্র্যাক করা ন্যাচারাল পোস্ট — বাকি সব
+    মেসেজ অক্ষত। ডিলিট ব্যর্থ হলে পরের সাইকেলে আবার; ৩ চেষ্টার পর
+    (মেসেজ আগেই মুছে গেলে) আর চেষ্টা করে না — লুপে আটকে থাকে না।"""
+    if not Config.NATURAL_DELETE_ENABLED:
+        return
+    cutoff = time.time() - Config.NATURAL_DELETE_AFTER_SECONDS
+    rows = conn.execute(
+        "SELECT message_id, attempts FROM natural_posts"
+        " WHERE deleted = 0 AND posted_at <= ?", (cutoff,),
+    ).fetchall()
+    if not rows:
+        return
+    changed = False
+    for message_id, attempts in rows:
+        if delete_message(message_id):
+            conn.execute(
+                "UPDATE natural_posts SET deleted = 1 WHERE message_id = ?",
+                (message_id,),
+            )
+            log.info("ন্যাচারাল নিউজ অটো-ডিলিট ✅ [msg %s]", message_id)
+        else:
+            attempts = int(attempts or 0) + 1
+            if attempts >= Config.NATURAL_DELETE_MAX_ATTEMPTS:
+                conn.execute(
+                    "UPDATE natural_posts SET deleted = 1, attempts = ?"
+                    " WHERE message_id = ?", (attempts, message_id),
+                )
+                log.warning("ডিলিট ব্যর্থ %d বার — আর চেষ্টা নয় [msg %s]",
+                            attempts, message_id)
+            else:
+                conn.execute(
+                    "UPDATE natural_posts SET attempts = ? WHERE message_id = ?",
+                    (attempts, message_id),
+                )
+                log.warning("ন্যাচারাল নিউজ ডিলিট ব্যর্থ — পরে আবার [msg %s]",
+                            message_id)
+        changed = True
+    if changed:
+        conn.commit()
 
 
 # =============================================================================
@@ -2520,6 +2629,13 @@ def main() -> None:
             check_economic_events(conn)
         except Exception as e:
             log.exception("ইভেন্ট-অ্যালার্ট চেকে এক্সেপশন — পরের সাইকেলে চলছি: %s", e)
+
+        # ন্যাচারাল নিউজের অটো-ডিলিট — ১ ঘণ্টা পুরনোটা বট নিজেই মুছে দেয়;
+        # আলাদা try/except, ডিলিটের সমস্যা নিউজ/ইভেন্টকে ছুঁয় না
+        try:
+            delete_expired_natural_posts(conn)
+        except Exception as e:
+            log.exception("ন্যাচারাল-ডিলিট চেকে এক্সেপশন — পরের সাইকেলে চলছি: %s", e)
 
         # সাইকেল শেষে POLL_INTERVAL থেকে elapsed বাদ; বাকি ঘুম (ন্যূনতম ৫ সেকেন্ড)
         elapsed = time.time() - cycle_start
