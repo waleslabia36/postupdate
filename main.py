@@ -134,8 +134,8 @@ class Config:
 
     # ---- ইকোনমিক ইভেন্ট অ্যালার্ট (Forex Factory ক্যালেন্ডার — সম্পূর্ণ ফ্রি) ----
     EVENT_CALENDAR_BASE = "https://www.forexfactory.com/calendar"
-    EVENT_MIN_IMPACT = "high"        # শুধু high-impact ইভেন্ট (NFP, CPI, FOMC...)
-    EVENT_CURRENCIES = ("USD",)      # কোন মুদ্রার ইভেন্ট ট্র্যাক হবে
+    EVENT_MIN_IMPACT = "high"        # USD High + নির্বাচিত USD Medium + JPY BOJ High
+    EVENT_CURRENCIES = ("USD", "JPY") # ক্রিপ্টো মার্কেটে প্রকৃত প্রভাব ফেলা কারেন্সি
     EVENT_ALERT_LEAD_1 = 60          # T−৬০ মিনিট: বিশ্লেষণ-বার্তা + সাথে সাথে পিন
     EVENT_ALERT_LEAD_2 = 30          # T−৩০ মিনিট: একই মেসেজ EDIT + রি-পিন (নতুন মেসেজ নয়)
     EVENT_IMPACT_DELAY = 0           # T+০ মিনিট (ইভেন্টের সাথে সাথেই ইনস্ট্যান্ট ইমপ্যাক্ট পোস্ট)
@@ -1927,9 +1927,132 @@ def _bd_time_str(epoch: float) -> str:
             f"{part} {_bn_num(h12)}:{minute2}")
 
 
+_USD_CRYPTO_MEDIUM_KEYWORDS = (
+    "ism ", "unemployment claims", "jobless claims", "consumer sentiment",
+    "inflation expectations", "jolts", "adp ", "fed ", "fomc", "powell",
+)
+_JPY_CRYPTO_HIGH_KEYWORDS = (
+    "boj", "ueda", "policy rate", "monetary policy", "interest rate",
+)
+
+
+def _is_crypto_moving_event(ev: dict) -> bool:
+    """ফরেক্স ফ্যাক্টরির ইভেন্টটি আসলেই ক্রিপ্টো মার্কেটে (BTC/ETH) মুভমেন্ট
+    ফেলতে পারে কিনা তা যাচাই করে:
+      ১) USD-এর সব High-Impact ইভেন্ট
+      ২) USD-এর নির্বাচিত গুরুত্বপূর্ণ Medium-Impact ইভেন্ট (ISM PMI, Jobless Claims, UoM Sentiment/Inflation, ADP, JOLTS)
+      ৩) JPY-এর High-Impact ব্যাংক অব জাপান (BOJ / Gov Ueda / Policy Rate) ইভেন্ট"""
+    impact = str(ev.get("impactName", "")).lower()
+    currency = str(ev.get("currency") or "").upper()
+    name_low = str(ev.get("name") or "").strip().lower()
+    if not name_low:
+        return False
+    if currency == "USD":
+        if impact == "high":
+            return True
+        if impact == "medium" and any(k in name_low for k in _USD_CRYPTO_MEDIUM_KEYWORDS):
+            return True
+        return False
+    if currency == "JPY":
+        if impact == "high" and any(k in name_low for k in _JPY_CRYPTO_HIGH_KEYWORDS):
+            return True
+        return False
+    return False
+
+
+def _estimate_crypto_impact(ev: dict) -> Tuple[str, str]:
+    """ইভেন্টের ধরন অনুযায়ী ক্রিপ্টো মার্কেটে সম্ভাব্য ইমপ্যাক্ট লেভেল এবং
+    কত শতাংশ (X%–Y%) আপ/ডাউন বা বুলিশ/বিয়ারিশ মুভমেন্ট হতে পারে তা ফেরত দেয়।"""
+    name_low = str(ev.get("name") or "").lower()
+    extreme_keys = (
+        "cpi", "non-farm", "federal funds rate", "fomc statement",
+        "fomc press conference", "core pce", "interest rate",
+    )
+    high_keys = (
+        "fomc", "powell", "gdp", "ppi", "retail sales",
+        "unemployment rate", "boj", "ueda", "policy rate",
+    )
+    if any(k in name_low for k in extreme_keys):
+        return "🔥 অতি উচ্চ (Extreme High)", "±২.৫% থেকে ৫.০%+ (আপ/ডাউন)"
+    if any(k in name_low for k in high_keys):
+        return "⚡ উচ্চ (High Impact)", "±১.৫% থেকে ৩.০% (আপ/ডাউন)"
+    return "📊 মাঝারি-উচ্চ (Medium-High)", "±১.০% থেকে ২.০% (আপ/ডাউন)"
+
+
+def _parse_num_val(s: str) -> Optional[float]:
+    """'89K', '4.1%', '-41.7B' ইত্যাদি স্ট্রিং থেকে সংখ্যা বের করে।"""
+    if not s:
+        return None
+    m = re.search(r"[-+]?\d+(?:\.\d+)?", str(s).replace(",", ""))
+    return float(m.group(0)) if m else None
+
+
+def _detect_pre_event_bias(ev: dict) -> Tuple[str, str]:
+    """ইভেন্ট শুরু হওয়ার ১ ঘণ্টা আগে পূর্বাভাস (Forecast) ও পূর্বের ডাটা (Previous)
+    দেখে নির্ধারণ করে:
+      - এটি কি ইভেন্ট শুরু হওয়া মাত্রই কোনো বক্তব্যের অপেক্ষা না করে অটোমেটিক
+        পাম্প বা ডাম্প করার ইভেন্ট (AUTO-BULLISH / AUTO-BEARISH)?
+      - নাকি ভেতরে কী বলা হয় বা কী পাস হয় তার ওপর নির্ভরশীল (STATEMENT DEPENDENT)?
+    রিটার্ন: (bias_code, bias_label_bn)"""
+    name_low = str(ev.get("name") or "").lower()
+    f_val = _parse_num_val(ev.get("forecast", ""))
+    p_val = _parse_num_val(ev.get("previous", ""))
+
+    # ভাষণ/মিটিং মিনিটস বা যেখানে সংখ্যা নেই → বক্তব্য/সিদ্ধান্তের ওপর নির্ভরশীল
+    if f_val is None or p_val is None or any(k in name_low for k in ("speaks", "minutes", "press conference", "statement")):
+        return (
+            "STATEMENT_DEPENDENT",
+            "⏳ বক্তব্য বা সিদ্ধান্তের ওপর নির্ভরশীল (STATEMENT DEPENDENT ⚡)",
+        )
+
+    diff = f_val - p_val
+    if abs(diff) < 1e-9:
+        return (
+            "STATEMENT_DEPENDENT",
+            "⏳ মূল ডাটা কী পাস হয় তার ওপর নির্ভরশীল (DATA DEPENDENT ⚡)",
+        )
+
+    lower_is_bullish_keys = (
+        "cpi", "ppi", "pce", "inflation", "non-farm", "adp", "jolts",
+        "federal funds rate", "policy rate", "interest rate", "ism ",
+    )
+    higher_is_bullish_keys = (
+        "unemployment claims", "jobless claims", "unemployment rate",
+    )
+
+    if any(k in name_low for k in lower_is_bullish_keys):
+        if diff < 0:
+            return (
+                "AUTO_BULLISH",
+                "🚀 ইভেন্ট শুরু হওয়া মাত্র অটোমেটিক পাম্পের সম্ভাবনা (AUTO-BULLISH 🟢)",
+            )
+        else:
+            return (
+                "AUTO_BEARISH",
+                "📉 ইভেন্ট শুরু হওয়া মাত্র বিয়ারিশ চাপের সম্ভাবনা (AUTO-BEARISH 🔴)",
+            )
+
+    if any(k in name_low for k in higher_is_bullish_keys):
+        if diff > 0:
+            return (
+                "AUTO_BULLISH",
+                "🚀 ইভেন্ট শুরু হওয়া মাত্র অটোমেটিক পাম্পের সম্ভাবনা (AUTO-BULLISH 🟢)",
+            )
+        else:
+            return (
+                "AUTO_BEARISH",
+                "📉 ইভেন্ট শুরু হওয়া মাত্র বিয়ারিশ চাপের সম্ভাবনা (AUTO-BEARISH 🔴)",
+            )
+
+    return (
+        "STATEMENT_DEPENDENT",
+        "⏳ মূল ফলাফল ও সিদ্ধান্তের ওপর নির্ভরশীল (DATA DEPENDENT ⚡)",
+    )
+
+
 def _ff_parse_events(html: str) -> List[dict]:
-    """Forex Factory পেজের JS-এ থাকা `days: [...]` JSON থেকে শুধু
-    high-impact + কনফিগার করা মুদ্রার (ডিফল্ট USD) ইভেন্ট বের করে।
+    """Forex Factory পেজের JS-এ থাকা `days: [...]` JSON থেকে শুধুমাত্র
+    ক্রিপ্টো মার্কেটে সত্যিকারের ইমপ্যাক্ট ফেলে এমন ইভেন্ট বের করে।
     প্রতিটি ইভেন্টের dateline = unix epoch (UTC) — টাইমজোন-হিসাব স্বয়ংক্রিয় সঠিক।"""
     events: List[dict] = []
     m = re.search(r"days:\s*(\[[\s\S]*?\])\s*,\s*time:", html or "")
@@ -1942,10 +2065,8 @@ def _ff_parse_events(html: str) -> List[dict]:
         return events
     for day in days:
         for ev in (day.get("events") or []):
-            if str(ev.get("impactName", "")).lower() != Config.EVENT_MIN_IMPACT:
-                continue                      # medium/low/holiday — বাদ
-            if ev.get("currency") not in Config.EVENT_CURRENCIES:
-                continue                      # অন্য মুদ্রা — বাদ
+            if not _is_crypto_moving_event(ev):
+                continue
             if not ev.get("dateline") or not str(ev.get("name") or "").strip():
                 continue
             events.append({
@@ -1960,10 +2081,42 @@ def _ff_parse_events(html: str) -> List[dict]:
     return events
 
 
+def _group_same_time_events(raw_events: List[dict]) -> List[dict]:
+    """একই সময়ে (dateline) ও একই কারেন্সিতে একাধিক সাব-ইভেন্ট থাকলে (যেমন ৬:৩০-এ
+    NFP + Unemployment Rate + Hourly Earnings, অথবা CPI m/m + CPI y/y + Core CPI)
+    সেগুলোকে একটি সমন্বিত ইভেন্টে একত্রিত করে, যাতে একই মিনিটে একাধিক পিন না হয়ে
+    একটি সম্পূর্ণ রিপোর্টে সব ডাটা যায়।"""
+    grouped: Dict[Tuple[str, int], List[dict]] = {}
+    for ev in raw_events:
+        k = (ev["currency"], int(ev["dateline"]))
+        grouped.setdefault(k, []).append(ev)
+
+    out: List[dict] = []
+    for (curr, dl), ev_list in grouped.items():
+        if len(ev_list) == 1:
+            e0 = dict(ev_list[0])
+            e0["sub_events"] = [dict(ev_list[0])]
+            out.append(e0)
+            continue
+        primary = dict(ev_list[0])
+        names = [e["name"] for e in ev_list]
+        primary["name"] = " / ".join(names[:3]) + (f" (+{len(names)-3})" if len(names) > 3 else "")
+        f_parts = [f"{e['name']}: {e['forecast']}" for e in ev_list if e.get("forecast")]
+        p_parts = [f"{e['name']}: {e['previous']}" for e in ev_list if e.get("previous")]
+        a_parts = [f"{e['name']}: {e['actual']}" for e in ev_list if e.get("actual")]
+        primary["forecast"] = " | ".join(f_parts) if len(f_parts) > 1 else (ev_list[0].get("forecast") or "")
+        primary["previous"] = " | ".join(p_parts) if len(p_parts) > 1 else (ev_list[0].get("previous") or "")
+        primary["actual"] = " | ".join(a_parts)
+        primary["sub_events"] = [dict(x) for x in ev_list]
+        out.append(primary)
+    out.sort(key=lambda e: e["dateline"])
+    return out
+
+
 def fetch_economic_events(force: bool = False) -> List[dict]:
-    """আগামী ৭ দিনের high-impact ইভেন্ট আনে (ঘণ্টায় একবার নেট ফেচ)।
-    দুটো পেজ: ① বর্তমান সপ্তাহ ② কাল থেকে শুরু হওয়া সপ্তাহ (week=oct4.2026
-    ফরম্যাট) — দুটো মিলে আগামী ৭ দিন পুরোপুরি ঢেকে দেয়।"""
+    """আগামী ৭ দিনের ক্রিপ্টো-মুভিং ইভেন্ট আনে (ঘণ্টায় একবার নেট ফেচ)।
+    তিনটি পেজ চেক করে (বর্তমান সপ্তাহ, আগামীকাল ও আগামী সপ্তাহ) যাতে সপ্তাহের
+    যেকোনো দিনেই সামনের ৭ দিনের সব ইভেন্ট পাওয়া যায়।"""
     now = time.time()
     cache = _EVENT_CAL_CACHE
     if (not force and cache["fetched_at"] and cache["events"]
@@ -1971,10 +2124,12 @@ def fetch_economic_events(force: bool = False) -> List[dict]:
         return list(cache["events"])
 
     urls = [Config.EVENT_CALENDAR_BASE]
-    # FF-এর পরের-সপ্তাহ প্যারামিটার: 'oct4.2026' (মাসের ইংরেজি অক্ষর ৩টা + তারিখ)
-    nxt = datetime.now(timezone.utc) + timedelta(days=1)
-    urls.append(f"{Config.EVENT_CALENDAR_BASE}?week="
-                f"{nxt.strftime('%b').lower()}{nxt.day}.{nxt.year}")
+    for delta_days in (1, 7):
+        nxt = datetime.now(timezone.utc) + timedelta(days=delta_days)
+        u = (f"{Config.EVENT_CALENDAR_BASE}?week="
+             f"{nxt.strftime('%b').lower()}{nxt.day}.{nxt.year}")
+        if u not in urls:
+            urls.append(u)
 
     merged: Dict[Any, dict] = {}
     for url in urls:
@@ -1987,39 +2142,68 @@ def fetch_economic_events(force: bool = False) -> List[dict]:
             log.warning("ইভেন্ট ক্যালেন্ডার ফেচ ব্যর্থ (%s): %s", url, e)
 
     horizon = now + Config.EVENT_HORIZON_HOURS * 3600
-    # গত ১৫ মিনিটের মধ্যে শুরু হওয়া বা আসন্ন ইভেন্ট রাখা হয় যাতে T+0 ইনস্ট্যান্ট
-    # পোলিংয়ের সময় ইভেন্টটি লিস্ট থেকে হারিয়ে না যায়।
-    events = [e for e in merged.values()
-              if now - 900 <= e["dateline"] <= horizon]
-    events.sort(key=lambda e: e["dateline"])
+    raw_valid = [e for e in merged.values()
+                 if now - 900 <= e["dateline"] <= horizon]
+    events = _group_same_time_events(raw_valid)
     if events or merged:
         cache["fetched_at"] = now          # ব্যর্থ হলে পুরনো ক্যাশেই থাকে
         cache["events"] = events
     return list(events)
 
 
-# ---- জেমিনি প্রম্পট (বাংলা সংক্ষিপ্ত বিশ্লেষণ; ব্যর্থ হলে টেমপ্লেট ফলব্যাক) ----
-_EVENT_PRE_PROMPT = """তুমি একজন ক্রিপ্টো মার্কেট অ্যানালিস্ট। নিচে অর্থনৈতিক ইভেন্টের তথ্য:
-নাম: {name} | মুদ্রা: {currency} | ইমপ্যাক্ট: High
+def _collect_live_event_headlines(ev: dict) -> str:
+    """ইভেন্ট শুরু হওয়ার পর (যেমন ৬:৩০-এ) ওই ইভেন্টে আসলে কী পাস হলো বা কী গুরুত্বপূর্ণ
+    কথা বলা হলো তা খুঁজে বের করতে ফাস্ট টেলিগ্রাম চ্যানেল (WatcherGuru, unfolded,
+    cointelegraph) থেকে সদ্য প্রকাশিত ব্রেকিং পোস্টগুলো স্ক্যান করে।"""
+    snippets: List[str] = []
+    for sub in ev.get("sub_events") or [ev]:
+        if sub.get("actual") or sub.get("forecast") or sub.get("previous"):
+            snippets.append(
+                f"Official Data — {sub.get('name')}: Actual={sub.get('actual') or 'Pending'}, "
+                f"Forecast={sub.get('forecast') or 'N/A'}, Previous={sub.get('previous') or 'N/A'}"
+            )
+
+    now_utc = datetime.now(timezone.utc)
+    for ch in ("WatcherGuru", "unfolded", "cointelegraph", "CoindeskGlobal"):
+        try:
+            for it in _fetch_single_channel(ch):
+                if it.published and (now_utc - it.published).total_seconds() <= 1200:
+                    snippets.append(f"[{ch}] {it.title[:220]}")
+        except Exception:
+            continue
+
+    if not snippets:
+        return "ইভেন্টটি এইমাত্র শুরু হয়েছে এবং মার্কেটে তাৎক্ষণিক প্রতিক্রিয়া দেখা যাচ্ছে।"
+    return "\n".join(snippets[:8])
+
+
+# ---- জেমিনি প্রম্পট (T-60 আগাম পূর্বাভাস বনাম T+0 লাইভ ইভেন্ট রিপোর্ট — সম্পূর্ণ আলাদা!) ----
+_EVENT_PRE_PROMPT = """তুমি একজন অভিজ্ঞ ক্রিপ্টো মার্কেট অ্যানালিস্ট। ১ ঘণ্টা পর নিচের অর্থনৈতিক ইভেন্টটি শুরু হবে:
+নাম: {name} | মুদ্রা: {currency}
+সম্ভাব্য ক্রিপ্টো ইমপ্যাক্ট: {impact_level} (সম্ভাব্য মুভমেন্ট: {move_range})
+প্রাক-মার্কেট ধারণা (Pre-Event Bias): {bias_label}
 বাংলাদেশ সময়: {bd_time} | পূর্বাভাস: {forecast} | পূর্বের: {previous}
 
-১২০-১৮০ অক্ষরের বাংলা সংক্ষেপ লেখো যাতে থাকে:
-(১) এই ইভেন্ট কী এবং কয়টায় (বাংলাদেশ সময়) হচ্ছে;
-(২) ফোরকাস্টের তুলনায় ফল বেশি হলে/কম হলে কী হতে পারে — কোনটা বুলিশ, কোনটা বিয়ারিশ;
-(৩) নিশ্চয়তার ভাষা নয় — "হতে পারে/সম্ভাবনা" ধরনের শব্দ।
-শুধু বাংলা প্লেইন টেক্সট (markdown নয়), সর্বোচ্চ ৪০০ অক্ষর।"""
-
-_EVENT_IMPACT_PROMPT = """তুমি একজন অভিজ্ঞ ক্রিপ্টো মার্কেট অ্যানালিস্ট। "{name}" ইভেন্টের মূল ডাটা/ঘোষণা এইমাত্র পাবলিশ হয়েছে।
-আসল ফল (Actual): {actual} | পূর্বাভাস (Forecast): {forecast} | পূর্বের (Previous): {previous}
-ইভেন্টের আগে থেকে এখন তাৎক্ষণিক দাম: BTC {btc_line} | ETH {eth_line}
-
-নিচের নিয়ম মেনে উত্তর দাও:
-১) প্রথম লাইনে শুধুমাত্র একটি শব্দে ক্রিপ্টো মার্কেটের ওপর এই ঘোষণার তাৎক্ষণিক প্রভাব লেখো: BULLISH অথবা BEARISH অথবা VOLATILE
-২) দ্বিতীয় লাইন থেকে ১৬০-২৬০ অক্ষরের সহজ ও স্পষ্ট বাংলায় লেখো:
-   - ইভেন্টে মূল কী ঘোষণা এলো (যেমন সুদের হার বা ডাটা কমেছে নাকি বেড়েছে, পূর্বাভাসের তুলনায় কেমন হলো);
-   - এই কারণে ক্রিপ্টো মার্কেটে এখন বুলিশ নাকি বিয়ারিশ ঘটতে পারে বা ঘটবে;
-   - মার্কেটে এই মুহূর্তে কী হচ্ছে এবং আগামীতে কী হতে পারে।
+১৬০-২৬০ অক্ষরের সহজ ও স্পষ্ট বাংলা আগাম বিশ্লেষণ লেখো:
+- যদি প্রাক-মার্কেট ধারণা AUTO-BULLISH বা AUTO-BEARISH হয়, তবে স্পষ্ট করে বলো কেন আজ কোনো বক্তব্যের অপেক্ষা না করেই ইভেন্ট শুরু হওয়ার সাথে সাথে মার্কেটে অটোমেটিক পাম্প (আপ) বা ডাম্প ({move_range}) আসতে পারে।
+- আর যদি বক্তব্য বা সিদ্ধান্তের ওপর নির্ভরশীল হয়, তবে স্পষ্ট করে বলো ভাষণে কী বললে বা কী পাস হলে কত পার্সেন্ট বুলিশ পাম্প হবে এবং কী বললে বিয়ারিশ ডাম্প হবে।
 শুধু বাংলা প্লেইন টেক্সট (markdown নয়), সর্বোচ্চ ৪৫০ অক্ষর।"""
+
+_EVENT_IMPACT_PROMPT = """তুমি একজন সিনিয়র ক্রিপ্টো মার্কেট অ্যানালিস্ট। "{name}" ({currency}) ইভেন্টটি এইমাত্র শুরু/প্রকাশিত হয়েছে।
+আগের ১ ঘণ্টা আগের সতর্কবার্তার কথা রিপিট করবে না — এখন ইভেন্ট থেকে পাওয়া আসল তথ্য বিশ্লেষণ করো:
+
+ইভেন্টের অফিশিয়াল ফলাফল: আসল (Actual): {actual} | পূর্বাভাস (Forecast): {forecast} | পূর্বের (Previous): {previous}
+ইভেন্ট নিয়ে সদ্য পাওয়া লাইভ ব্রেকিং তথ্য/বক্তব্য:
+{live_context}
+ইভেন্টের আগে থেকে বর্তমান দাম: BTC {btc_line} | ETH {eth_line}
+
+শুধু নিচের JSON ফরম্যাটে উত্তর দাও (কোনো অতিরিক্ত লেখা বা কোড-ফেন্স নয়):
+{{
+  "signal": "BULLISH অথবা BEARISH অথবা VOLATILE",
+  "what_passed_bn": "ইভেন্টে সুনির্দিষ্টভাবে কী পাস হলো, কোন ডাটা কত এলো বা ক্রিপ্টো/অর্থনীতি নিয়ে মূল কী কথা বলা হলো (১০০-১৮০ অক্ষর বাংলা)",
+  "instant_impact_bn": "এই কথা বা ডাটার কারণে ঠিক এখন মার্কেটে কী হচ্ছে এবং আগামী ১-২ ঘণ্টায় কতটুকু বুলিশ বা বিয়ারিশ মুভমেন্ট হতে পারে (১০০-১৮০ অক্ষর বাংলা)",
+  "next_days_bn": "এই সিদ্ধান্তের প্রভাবে আগামী কয়েক দিন ক্রিপ্টো মার্কেট কীভাবে চলতে পারে ও পরবর্তী ট্রেন্ড কেমন হতে পারে (১০০-১৮০ অক্ষর বাংলা)"
+}}"""
 
 
 def _event_gemini_text(prompt: str) -> Optional[str]:
@@ -2032,17 +2216,17 @@ def _event_gemini_text(prompt: str) -> Optional[str]:
     for model_name in models:
         try:
             text = _call_gemini(model_name, prompt)
-            if text and len(text.strip()) >= 40:
-                return text.strip()[:900]
+            if text and len(text.strip()) >= 30:
+                return text.strip()[:1500]
         except Exception as e:
             log.warning("ইভেন্ট বিশ্লেষণ Gemini ব্যর্থ (%s): %s", model_name, e)
     return None
 
 
-def _parse_impact_response(raw_text: Optional[str], before: Dict[str, Optional[float]],
-                           after: Dict[str, Optional[float]]) -> Tuple[str, Optional[str]]:
-    """Gemini-র উত্তর থেকে প্রথম লাইনের মার্কেট সিগন্যাল (BULLISH/BEARISH/VOLATILE)
-    এবং বাংলা বিশ্লেষণ আলাদা করে।"""
+def _parse_impact_json(raw_text: Optional[str], ev: dict,
+                       before: Dict[str, Optional[float]],
+                       after: Dict[str, Optional[float]]) -> Dict[str, str]:
+    """T+0 লাইভ ইভেন্ট রিপোর্টের JSON পার্স করে (ব্যর্থ হলে স্মার্ট বাংলা ফলব্যাক দেয়)।"""
     default_sig = "VOLATILE"
     b_btc, a_btc = before.get("BTC"), after.get("BTC")
     if b_btc and a_btc and b_btc > 0:
@@ -2051,55 +2235,98 @@ def _parse_impact_response(raw_text: Optional[str], before: Dict[str, Optional[f
             default_sig = "BULLISH"
         elif pct <= -0.15:
             default_sig = "BEARISH"
-    if not raw_text:
-        return default_sig, None
-    lines = [ln.strip() for ln in raw_text.strip().splitlines() if ln.strip()]
-    if not lines:
-        return default_sig, None
-    first_upper = lines[0].upper()
-    sig = default_sig
-    body_lines = lines
-    for candidate in ("BULLISH", "BEARISH", "VOLATILE"):
-        if candidate in first_upper and len(lines[0]) <= 30:
-            sig = candidate
-            body_lines = lines[1:] if len(lines) > 1 else lines
-            break
-    body = " ".join(body_lines).strip()
-    return sig, (body if len(body) >= 30 else raw_text.strip())
+
+    fallback_passed = (
+        f"{ev['name']} ইভেন্টের সদ্য প্রকাশিত রিপোর্টে আসল ফলাফল এসেছে {ev.get('actual') or 'সদ্য ঘোষিত'}, "
+        f"যেখানে পূর্বাভাস ছিল {ev.get('forecast') or '—'} এবং পূর্বের ফলাফল ছিল {ev.get('previous') or '—'}।"
+    )
+    fallback_instant = (
+        "ইভেন্টের মূল তথ্য প্রকাশের সাথে সাথে বিটকয়েন ও ইথেরিয়ামে তাৎক্ষণিক মুভমেন্ট শুরু হয়েছে। "
+        "আগামী ১–২ ঘণ্টায় বাজারে উচ্চ ভোলাটিলিটি ও দ্রুত প্রাইস অ্যাকশন দেখা যেতে পারে।"
+    )
+    fallback_next_days = (
+        "আজকের এই ইভেন্টের সিদ্ধান্তের ওপর ভিত্তি করে আগামী কয়েক দিন মার্কিন ডলার ইনডেক্স ও ক্রিপ্টো মার্কেটের "
+        "পরবর্তী সাপোর্ট ও রেজিস্ট্যান্স লেভেল নির্ধারিত হবে।"
+    )
+
+    if raw_text:
+        cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw_text.strip())
+        m = re.search(r"\{.*\}", cleaned, re.S)
+        if m:
+            try:
+                data = json.loads(m.group(0))
+                if isinstance(data, dict):
+                    sig = str(data.get("signal", default_sig)).strip().upper()
+                    if sig not in ("BULLISH", "BEARISH", "VOLATILE"):
+                        sig = default_sig
+                    return {
+                        "signal": sig,
+                        "what_passed_bn": str(data.get("what_passed_bn") or fallback_passed).strip(),
+                        "instant_impact_bn": str(data.get("instant_impact_bn") or fallback_instant).strip(),
+                        "next_days_bn": str(data.get("next_days_bn") or fallback_next_days).strip(),
+                    }
+            except Exception:
+                pass
+
+    return {
+        "signal": default_sig,
+        "what_passed_bn": fallback_passed,
+        "instant_impact_bn": fallback_instant,
+        "next_days_bn": fallback_next_days,
+    }
 
 
 def _build_pre_event_msg(ev: dict, analysis: str, bd_time: str) -> str:
-    """T−৬০ বার্তা (HTML) — নাম, বাংলাদেশ সময়, forecast/previous, বিশ্লেষণ।"""
+    """T−৬০ বার্তা (HTML) — ১ ঘণ্টা আগে আগাম পূর্বাভাস, সম্ভাব্য % মুভমেন্ট এবং
+    অটোমেটিক পাম্প/ডাম্প নাকি বক্তব্যের ওপর নির্ভরশীল তার স্পষ্ট বিবরণ।"""
+    impact_level, move_range = _estimate_crypto_impact(ev)
+    _bias_code, bias_label = _detect_pre_event_bias(ev)
     return (
         "🔔 <b>ইভেন্ট অ্যালার্ট: " + html_escape(ev["name"]) + "</b>\n"
         "📅 <b>বাংলাদেশ সময়: " + bd_time + "</b>\n"
-        "💱 " + html_escape(ev["currency"]) +
-        " | 📌 পূর্বাভাস: " + html_escape(ev["forecast"] or "—") +
-        " | পূর্বের: " + html_escape(ev["previous"] or "—") + "\n\n"
-        + analysis + "\n\n"
-        "⚠️ ইভেন্ট শুরু হওয়া মাত্রই ইনস্ট্যান্ট ফলাফল ও মার্কেট-ইমপ্যাক্ট এখানেই পোস্ট হবে।"
+        "💱 কারেন্সি: <b>" + html_escape(ev["currency"]) + "</b>" +
+        " | 📌 পূর্বাভাস: <b>" + html_escape(ev["forecast"] or "—") + "</b>" +
+        " | পূর্বের: <b>" + html_escape(ev["previous"] or "—") + "</b>\n"
+        "📊 <b>সম্ভাব্য মার্কেট ইমপ্যাক্ট:</b> " + impact_level + " (<b>" + move_range + "</b>)\n"
+        "🎯 <b>প্রাক-মার্কেট ধারণা:</b> <b>" + bias_label + "</b>\n\n"
+        "🧠 <b>আগাম বিশ্লেষণ:</b>\n"
+        + html_escape(analysis) + "\n\n"
+        "⚡ ইভেন্ট শুরু হওয়ার পর ভেতরে কী পাস হলো বা কী বলা হলো, তা পাওয়া মাত্রই আলাদা বিশ্লেষণ দেওয়া হবে।"
     )
 
 
-def _build_impact_event_msg(ev: dict, analysis: str,
+def _build_impact_event_msg(ev: dict, report: Dict[str, str],
                             before: Dict[str, Optional[float]],
-                            after: Dict[str, Optional[float]],
-                            signal: str = "VOLATILE") -> str:
-    """ইভেন্টের সাথে সাথে ইনস্ট্যান্ট ফলাফল ও মার্কেট-ইমপ্যাক্ট বার্তা (HTML)।"""
+                            after: Dict[str, Optional[float]]) -> str:
+    """T+0 (ইভেন্ট শুরু হওয়ার পর) সম্পূর্ণ আলাদা লাইভ রিপোর্ট ও সিদ্ধান্ত বার্তা (HTML):
+    ১) ইভেন্টে যা পাস হলো / মূল যা বলা হলো
+    ২) তাৎক্ষণিক ইমপ্যাক্ট (এখন কী হবে)
+    ৩) আগামী দিনের মার্কেট পূর্বাভাস (সামনে কীভাবে চলতে পারে)"""
+    signal = report.get("signal", "VOLATILE")
     sig_map = {
         "BULLISH": "BULLISH 🟢 (বুলিশ ইমপ্যাক্ট)",
         "BEARISH": "BEARISH 🔴 (বিয়ারিশ ইমপ্যাক্ট)",
-        "VOLATILE": "VOLATILE ⚡ (উভয়মুখী মুভমেন্ট)",
+        "VOLATILE": "MIXED / VOLATILE ⚡ (উভয়মুখী মুভমেন্ট)",
     }
     sig_label = sig_map.get(signal, sig_map["VOLATILE"])
-    lines = ["🚨 <b>ইনস্ট্যান্ট ইভেন্ট আপডেট: " + html_escape(ev["name"]) + "</b>"]
+
+    lines = [
+        "🚨 <b>ইভেন্ট লাইভ রিপোর্ট ও সিদ্ধান্ত: " + html_escape(ev["name"]) + "</b>",
+        "",
+        "📢 <b>ইভেন্টে যা পাস হলো / মূল যা বলা হলো:</b>",
+        "• " + html_escape(report.get("what_passed_bn") or ""),
+    ]
     if ev.get("actual") or ev.get("forecast") or ev.get("previous"):
         lines.append(
-            "📌 আসল ফলাফল: <b>" + html_escape(ev.get("actual") or "সদ্য প্রকাশিত") + "</b>"
+            "📌 আসল ডাটা: <b>" + html_escape(ev.get("actual") or "সদ্য প্রকাশিত") + "</b>"
             " | পূর্বাভাস: " + html_escape(ev.get("forecast") or "—") +
             " | পূর্বের: " + html_escape(ev.get("previous") or "—")
         )
-    lines.append("📊 <b>MARKET IMPACT:</b> <b>" + sig_label + "</b>")
+
+    lines.append("")
+    lines.append("📊 <b>ক্রিপ্টো মার্কেটের ওপর প্রভাব:</b> <b>" + sig_label + "</b>")
+
+    price_parts = []
     for tag in ("BTC", "ETH"):
         b, a = before.get(tag), after.get(tag)
         if a is None:
@@ -2107,20 +2334,27 @@ def _build_impact_event_msg(ev: dict, analysis: str,
         if b is not None and b > 0:
             pct = (a - b) / b * 100.0
             arrow = "📈" if pct >= 0 else "📉"
-            lines.append(f"{arrow} <b>{tag}:</b> {pct:+.2f}% (${b:,.0f} → ${a:,.0f})")
+            price_parts.append(f"{arrow} <b>{tag}:</b> {pct:+.2f}% (${b:,.0f} → ${a:,.0f})")
         else:
-            lines.append(f"🔹 <b>{tag} এখন:</b> ${a:,.0f}")
-    lines.append("")
-    lines.append("🧠 <b>মার্কেটে এখন কী হচ্ছে ও সামনে কী হতে পারে:</b>")
-    lines.append(html_escape(analysis))
-    lines.append("")
-    lines.append(f'🔔 <b>Follow: <a href="{html_escape(Config.FOLLOW_CHANNEL_URL)}">CRYPTO UPDATE</a></b>')
+            price_parts.append(f"🔹 <b>{tag}:</b> ${a:,.0f}")
+    if price_parts:
+        lines.append(" | ".join(price_parts))
+
+    lines.extend([
+        "",
+        "⚡ <b>তাৎক্ষণিক ইমপ্যাক্ট (এখন কী হবে):</b>",
+        html_escape(report.get("instant_impact_bn") or ""),
+        "",
+        "🗓️ <b>আগামী দিনের মার্কেট পূর্বাভাস (সামনে কীভাবে চলতে পারে):</b>",
+        html_escape(report.get("next_days_bn") or ""),
+        "",
+        f'🔔 <b>Follow: <a href="{html_escape(Config.FOLLOW_CHANNEL_URL)}">CRYPTO UPDATE</a></b>',
+    ])
     return "\n".join(lines)
 
 
 def _row_dict(cur) -> dict:
-    """fetchone()-এর ফলাফল dict-এ রূপান্তর (গেটডবেতে row_factory নেই —
-    পুরনো কোড tuple-ইনডেক্স ব্যবহার করে, তাই নতুন ইভেন্ট-কোড dict নেয়)।"""
+    """fetchone()-এর ফলাফল dict-এ রূপান্তর।"""
     r = cur.fetchone()
     if r is None:
         return None
@@ -2162,27 +2396,38 @@ def _reload_event_row(conn, key: str):
 
 
 def _do_pre_alert(conn, ev: dict) -> None:
-    """T−৬০ ধাপ: বিশ্লেষণ-বার্তা পাঠাও → সাথে সাথে পিন → বেসলাইন দাম সেভ।
-    পাঠানো না গেলে স্টেজ অপরিবর্তিত — পরের সাইকেলে আবার চেষ্টা (ডুপ ঝুঁকি নেই,
-    কারণ ব্যর্থ মানে মেসেজই চ্যানেলে পৌঁছায়নি)।"""
+    """T−৬০ ধাপ: আগাম পূর্বাভাস বার্তা পাঠাও → সাথে সাথে পিন → বেসলাইন দাম সেভ।"""
     key = f"{ev['ff_id']}_{ev['dateline']}"
-    # ইভেন্টের আগের দাম — পরে % হিসাবের বেসলাইন (ফেল হলেও বার্তা যাবে)
     pre_btc = fetch_spot_price("BTCUSDT")
     pre_eth = fetch_spot_price("ETHUSDT")
     bd_time = _bd_time_str(ev["dateline"])
+    impact_level, move_range = _estimate_crypto_impact(ev)
+    bias_code, bias_label = _detect_pre_event_bias(ev)
     prompt = _EVENT_PRE_PROMPT.format(
         name=ev["name"], currency=ev["currency"], bd_time=bd_time,
         forecast=ev["forecast"] or "—", previous=ev["previous"] or "—",
+        impact_level=impact_level, move_range=move_range,
+        bias_label=bias_label,
     )
     analysis = _event_gemini_text(prompt)
     if analysis is None:
-        analysis = (
-            f"{ev['name']} — বাংলাদেশ সময় {bd_time} এ {ev['currency']}-এর "
-            f"হাই-ইমপ্যাক্ট ইভেন্ট। পূর্বাভাস {ev['forecast'] or '—'}, "
-            f"পূর্বের {ev['previous'] or '—'}। ফলাফল অপেক্ষার সাথে সাথে "
-            f"বাজারে তীব্র প্রভাব ফেলতে পারে — পূর্বাভাসের তুলনায় বেশি হলে "
-            f"বিয়ারিশ/কম হলে বুলিশ প্রতিক্রিয়ার সম্ভাবনা।"
-        )
+        if bias_code == "AUTO_BULLISH":
+            analysis = (
+                f"পূর্বের ডাটার ({ev['previous'] or '—'}) তুলনায় আজকের পূর্বাভাস ({ev['forecast'] or '—'}) ক্রিপ্টো বাজারের "
+                f"অনুকূলে থাকায় কোনো দীর্ঘ বক্তব্যের অপেক্ষা না করেই ইভেন্ট শুরু হওয়ার সাথে সাথে মার্কেটে "
+                f"অটোমেটিক {move_range} বুলিশ পাম্প শুরু হওয়ার জোরালো সম্ভাবনা রয়েছে।"
+            )
+        elif bias_code == "AUTO_BEARISH":
+            analysis = (
+                f"পূর্বের ডাটার ({ev['previous'] or '—'}) তুলনায় আজকের পূর্বাভাস ({ev['forecast'] or '—'}) কিছুটা প্রতিকূলে "
+                f"থাকায় ইভেন্ট শুরু হওয়ার সাথে সাথে মার্কেটে {move_range} বিয়ারিশ চাপ তৈরি হতে পারে।"
+            )
+        else:
+            analysis = (
+                f"{ev['name']} ইভেন্টটি বাংলাদেশ সময় {bd_time}-এ শুরু হবে, যা মার্কেটে {move_range} মুভমেন্ট "
+                f"ফেলতে পারে। ভেতরে ক্রিপ্টো ও সুদের হার নিয়ে কী পাস হয় বা কী বলা হয় তার ওপর নির্ভর করে "
+                f"মার্কেট দ্রুত বুলিশ বা বিয়ারিশ দিকে যাবে।"
+            )
     msg = _build_pre_event_msg(ev, analysis, bd_time)
     mid = send_text_message_id(msg, parse_mode="HTML")
     if mid is None:
@@ -2199,17 +2444,14 @@ def _do_pre_alert(conn, ev: dict) -> None:
 
 
 def _do_t30_update(conn, ev: dict) -> None:
-    """T−৩০ ধাপ: নতুন মেসেজ নয় — পিন করা একই মেসেজ EDIT + আবার RE-PIN।
-    edit-এ কোনো পুশ নোটিফিকেশন যায় না (টেলিগ্রাম-সীমা), তাই রি-পিন করা হয় —
-    পিন-নোটিফিকেশন আরেকবার যায়, মূল বার্তা তবু একবারই পাঠানো থাকে।"""
+    """T−৩০ ধাপ: নতুন মেসেজ নয় — পিন করা একই মেসেজ EDIT + আবার RE-PIN।"""
     key = f"{ev['ff_id']}_{ev['dateline']}"
     row = _reload_event_row(conn, key)
     if int(row["stage"]) < 1:
-        # T-60 এখনো যায়নি (নেট/-API সমস্যা) — আগে পাঠাও+পিন করাও
         _do_pre_alert(conn, ev)
         row = _reload_event_row(conn, key)
         if row is None or int(row["stage"]) < 1 or row["pinned_msg_id"] is None:
-            return        # এখনো যায়নি — পরের সাইকেলে আবার চেষ্টা হবে
+            return
     mid = row["pinned_msg_id"]
     bd_time = _bd_time_str(ev["dateline"])
     text30 = (f"⚠️ <b>৩০ মিনিট বাকি!</b> (ঘটনা: {bd_time})\n\n"
@@ -2217,7 +2459,7 @@ def _do_t30_update(conn, ev: dict) -> None:
     if not edit_text_message(mid, text30, parse_mode="HTML"):
         log.warning("ইভেন্ট T-30 এডিট ব্যর্থ — আবার চেষ্টা হবে [%s]", ev["name"])
         return
-    pin_message(mid)          # রি-পিন = নতুন মেসেজ ছাড়াই আরেকবার অ্যালার্ট
+    pin_message(mid)
     conn.execute(
         "UPDATE economic_events SET stage=2 WHERE event_key=?", (key,)
     )
@@ -2226,32 +2468,25 @@ def _do_t30_update(conn, ev: dict) -> None:
 
 
 def _do_impact(conn, ev: dict) -> None:
-    """ইভেন্টের সময় হওয়া মাত্রই (T+0, যেমন ঠিক ৬:৩০ মিনিটে) ইনস্ট্যান্ট ফলাফল
-    ও মার্কেট-ইমপ্যাক্ট (বুলিশ/বিয়ারিশ + মার্কেটে এখন কী হচ্ছে ও সামনে কী হতে পারে)
-    পোস্ট → আগের পিন আনপিন।
-    যদি সংখ্যাভিত্তিক ইভেন্ট হয় এবং Forex Factory-তে ওই মুহূর্তে Actual উঠতে কয়েক
-    সেকেন্ড বাকি থাকে, তবে সর্বোচ্চ ৯০ সেকেন্ড পর্যন্ত প্রতি ১০ সেকেন্ডে লাইভ চেক করে
-    ডাটা আসামাত্র সাথে সাথে পোস্ট করে দেয়।"""
+    """ইভেন্ট শুরু হওয়ার পর (T+0, যেমন ঠিক ৬:৩০ মিনিটে) ইভেন্টের ভেতর থেকে আসল কী
+    পাস হলো বা কী বলা হলো তা খুঁজে বের করে সম্পূর্ণ নতুন ও বিস্তারিত বিশ্লেষণ (তাৎক্ষণিক ইমপ্যাক্ট
+    + আগামী দিনের পূর্বাভাস) পোস্ট করে এবং আগের পিন মেসেজটি আনপিন করে।"""
     key = f"{ev['ff_id']}_{ev['dateline']}"
     row = _reload_event_row(conn, key)
     if row is None or int(row["stage"]) >= 3:
         return
 
-    # আসল ফল ক্যালেন্ডার ক্যাশে এখনো না এসে থাকতে পারে — বাধ্যতামূলক লাইভ রিফ্রেশ
     if not ev.get("actual"):
         for e2 in fetch_economic_events(force=True):
             if (e2["ff_id"], e2["dateline"]) == (ev["ff_id"], ev["dateline"]):
                 ev = e2
                 break
 
-    # সংখ্যাভিত্তিক ইভেন্টে (যেখানে forecast বা previous আছে) ইভেন্টের ঠিক ০-৯০ সেকেন্ডের
-    # মধ্যে যদি এখনো actual না আসে, তবে ১০ সেকেন্ড পর আবার পোল করবে যাতে আসল সংখ্যা
-    # আসা মাত্রই ইনস্ট্যান্ট পোস্ট যায়।
     has_numeric_expectation = bool(ev.get("forecast") or ev.get("previous"))
     elapsed_since_event = time.time() - float(ev["dateline"])
     if (has_numeric_expectation and not ev.get("actual")
             and 0 <= elapsed_since_event < Config.EVENT_ACTUAL_WAIT_MAX_SECONDS):
-        log.info("ইভেন্ট শুরু হয়েছে [%s] — লাইভ ফলাফল (Actual) প্রকাশের অপেক্ষায় (%.0fs)...",
+        log.info("ইভেন্ট শুরু হয়েছে [%s] — লাইভ ডাটা (Actual) প্রকাশের অপেক্ষায় (%.0fs)...",
                  ev["name"], elapsed_since_event)
         return
 
@@ -2265,23 +2500,22 @@ def _do_impact(conn, ev: dict) -> None:
             return f"${a:,.0f}" if a else "দাম পাওয়া যায়নি"
         return f"{(a - b) / b * 100.0:+.2f}% (${b:,.0f} → ${a:,.0f})"
 
+    live_context = _collect_live_event_headlines(ev)
     prompt = _EVENT_IMPACT_PROMPT.format(
-        name=ev["name"], actual=ev.get("actual") or "সদ্য প্রকাশিত/ভাষণ চলমান",
+        name=ev["name"], currency=ev["currency"],
+        actual=ev.get("actual") or "সদ্য প্রকাশিত / বক্তব্য চলমান",
         forecast=ev.get("forecast") or "—", previous=ev.get("previous") or "—",
+        live_context=live_context,
         btc_line=_delta_line("BTC"), eth_line=_delta_line("ETH"),
     )
     raw_ai = _event_gemini_text(prompt)
-    signal, analysis = _parse_impact_response(raw_ai, before, after)
-    if analysis is None:
-        analysis = ("ইভেন্ট প্রকাশের সাথে সাথে ক্রিপ্টো মার্কেটে তাৎক্ষণিক মুভমেন্ট শুরু হয়েছে। "
-                    "উপরের পরিসংখ্যান অনুযায়ী বিটকয়েন ও ইথেরিয়ামের দামে প্রতিক্রিয়া দেখা যাচ্ছে এবং "
-                    "আগামী কয়েক ঘণ্টায় বাজারে উচ্চ ভোলাটিলিটি বজায় থাকতে পারে।")
-    msg = _build_impact_event_msg(ev, analysis, before, after, signal=signal)
+    report = _parse_impact_json(raw_ai, ev, before, after)
+    msg = _build_impact_event_msg(ev, report, before, after)
     if not send_text_message(msg, parse_mode="HTML"):
-        log.warning("ইভেন্ট ইমপ্যাক্ট পোস্ট যায়নি — পরের লুপেই আবার চেষ্টা হবে [%s]",
+        log.warning("ইভেন্ট লাইভ রিপোর্ট পোস্ট যায়নি — পরের লুপেই আবার চেষ্টা হবে [%s]",
                     ev["name"])
         return
-    # পোস্ট সফল → আগের পিন করা অ্যালার্ট আনপিন
+
     if row["pinned_msg_id"]:
         unpin_message(row["pinned_msg_id"])
     conn.execute(
@@ -2289,15 +2523,14 @@ def _do_impact(conn, ev: dict) -> None:
         (ev.get("actual") or "", key),
     )
     conn.commit()
-    log.info("🚨 ইনস্ট্যান্ট ইভেন্ট ফলাফল+ইমপ্যাক্ট পোস্ট ও আনপিন ✅ [%s | %s]",
-             ev["name"], signal)
+    log.info("🚨 ইনস্ট্যান্ট ইভেন্ট লাইভ রিপোর্ট ও সিদ্ধান্ত পোস্ট + আনপিন ✅ [%s | %s]",
+             ev["name"], report.get("signal"))
 
 
 def check_economic_events(conn) -> bool:
     """আসন্ন ইভেন্টের ধাপ চালায়:
-    T−৬০ → পাঠাও+পিন; T−৩০ → একই মেসেজ এডিট+রি-পিন; T+০ (ইভেন্টের সাথে সাথে) →
-    ইনস্ট্যান্ট ফলাফল+মার্কেট ইমপ্যাক্ট পোস্ট ও আনপিন।
-    রিটার্ন: কোনো ইভেন্টের ইমপ্যাক্ট উইন্ডো চলমান থাকলে True (তখন ১০ সেকেন্ডে ফাস্ট পোলিং হবে)।"""
+    T−৬০ → আগাম পূর্বাভাস পাঠাও+পিন; T−৩০ → একই মেসেজ এডিট+রি-পিন;
+    T+০ (ইভেন্ট শুরু হওয়া মাত্র) → ইভেন্টে কী পাস হলো/বলা হলো + তাৎক্ষণিক ও আগামী দিনের বিশ্লেষণ পোস্ট।"""
     events = fetch_economic_events()
     if not events:
         return False
@@ -2315,9 +2548,9 @@ def check_economic_events(conn) -> bool:
             if abs(now - ev["dateline"]) <= 180:
                 fast_poll_needed = True
             if now >= t3:
-                _do_impact(conn, ev)               # ইভেন্ট শুরু হওয়া মাত্রই ইনস্ট্যান্ট ফলাফল + আনপিন
+                _do_impact(conn, ev)
             elif now >= t2 and stage < 2:
-                _do_t30_update(conn, ev)            # (দরকার হলে T-60 নিজে পাঠায়)
+                _do_t30_update(conn, ev)
             elif now >= t1 and stage < 1:
                 _do_pre_alert(conn, ev)
         except Exception as e:
@@ -2328,7 +2561,7 @@ def check_economic_events(conn) -> bool:
 def event_alert_loop() -> None:
     """ইকোনমিক ইভেন্টের জন্য আলাদা ডেডিকেটেড daemon থ্রেড (নিজস্ব DB কানেকশন)।
     ধীরগতির নিউজ লুপের জন্য অপেক্ষা না করে প্রতি ১৫ সেকেন্ডে (এবং ইভেন্টের সময়
-    প্রতি ১০ সেকেন্ডে) চেক করে, যাতে ৬:৩০-এর ইভেন্ট ঠিক ৬:৩০-এই ইনস্ট্যান্ট পোস্ট হয়।"""
+    প্রতি ৫ সেকেন্ডে) চেক করে, যাতে ৬:৩০-এর ইভেন্ট ঠিক ৬:৩০-এই ইনস্ট্যান্ট পোস্ট হয়।"""
     conn = get_db()
     while True:
         try:
