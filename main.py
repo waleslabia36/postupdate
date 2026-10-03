@@ -77,6 +77,8 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] [%(threadName)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
+    stream=sys.stdout,
+    force=True,
 )
 log = logging.getLogger("cryptobarta")
 
@@ -128,7 +130,7 @@ class Config:
 
     # ---- ফ্রেশনেস ফিল্টার ----
     # ৫ মিনিটের বেশি পুরনো কোনো আইটেম পোস্ট হবে না
-    FRESH_WINDOW_SECONDS = 300
+    FRESH_WINDOW_SECONDS = 1800
 
     # ---- ইকোনমিক ইভেন্ট অ্যালার্ট (Forex Factory ক্যালেন্ডার — সম্পূর্ণ ফ্রি) ----
     EVENT_CALENDAR_BASE = "https://www.forexfactory.com/calendar"
@@ -249,15 +251,12 @@ class Config:
 
     # ---- প্রাইস অ্যালার্ট সিস্টেম ----
     ENABLE_PRICE_ALERTS = True
-    BINANCE_TICKER_URL = "https://api.binance.com/api/v3/ticker/price"
-    BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"
-    BINANCE_24HR_TICKER_URL = "https://api.binance.com/api/v3/ticker/24hr"
+    BINANCE_TICKER_URL = "https://data-api.binance.vision/api/v3/ticker/price"
+    BINANCE_KLINES_URL = "https://data-api.binance.vision/api/v3/klines"
+    BINANCE_24HR_TICKER_URL = "https://data-api.binance.vision/api/v3/ticker/24hr"
     # Binance ব্লক/ডাউন হলে স্বয়ংক্রিয় ফলব্যাক
     COINGECKO_PRICE_URL = "https://api.coingecko.com/api/v3/simple/price"
     # প্রতি মাইলস্টোন চেকের মাঝে ৩০–৪৫ সেকেন্ড random gap
-    PRICE_CHECK_MIN_SECONDS = 30
-    PRICE_CHECK_MAX_SECONDS = 45
-    # মাইলস্টোন ধাপ: ETH ৫০ কেন্ড random gap
     PRICE_CHECK_MIN_SECONDS = 30
     PRICE_CHECK_MAX_SECONDS = 45
     # মাইলস্টোন ধাপ: ETH ৫০ ডলার ধাপে, BTC ৫০০ ডলার ধাপে
@@ -937,7 +936,7 @@ def is_item_fresh(item: NewsItem, now: Optional[datetime] = None) -> bool:
     if published.tzinfo is None:
         published = published.replace(tzinfo=timezone.utc)
     cutoff = max(
-        BOT_START_TIME,
+        BOT_START_TIME - timedelta(seconds=Config.FRESH_WINDOW_SECONDS),
         now - timedelta(seconds=Config.FRESH_WINDOW_SECONDS),
     )
     return published >= cutoff
