@@ -130,7 +130,7 @@ class Config:
 
     # ---- ফ্রেশনেস ফিল্টার ----
     # ৫ মিনিটের বেশি পুরনো কোনো আইটেম পোস্ট হবে না
-    FRESH_WINDOW_SECONDS = 1800
+    FRESH_WINDOW_SECONDS = 300
 
     # ---- ইকোনমিক ইভেন্ট অ্যালার্ট (Forex Factory ক্যালেন্ডার — সম্পূর্ণ ফ্রি) ----
     EVENT_CALENDAR_BASE = "https://www.forexfactory.com/calendar"
@@ -936,7 +936,7 @@ def is_item_fresh(item: NewsItem, now: Optional[datetime] = None) -> bool:
     if published.tzinfo is None:
         published = published.replace(tzinfo=timezone.utc)
     cutoff = max(
-        BOT_START_TIME - timedelta(seconds=Config.FRESH_WINDOW_SECONDS),
+        BOT_START_TIME,
         now - timedelta(seconds=Config.FRESH_WINDOW_SECONDS),
     )
     return published >= cutoff
@@ -952,21 +952,25 @@ def is_item_fresh(item: NewsItem, now: Optional[datetime] = None) -> bool:
 # Gemini API সম্পূর্ণ ব্যর্থ।
 # =============================================================================
 _HEADLINE_SYSTEM_PROMPT = """তুমি "CRYPTO BARTA" টেলিগ্রাম চ্যানেলের একজন অভিজ্ঞ ক্রিপ্টো নিউজ এডিটর।
-নিচে একটি খবর দেওয়া আছে — আগে যাচাই করো এটি ক্রিপ্টো/ব্লকচেইন বা ক্রিপ্টো মার্কেটে প্রভাব ফেলার মতো অর্থনৈতিক খবর কিনা, তারপর বাংলা হেডলাইন লিখো।
+নিচে একটি নতুন খবর এবং সম্প্রতি চ্যানেলে পোস্ট হওয়া খবরের তালিকা দেওয়া আছে।
 
 সোর্স: {source}
-খবরের শিরোনাম: {title}
-খবরের বিবরণ: {summary}
+নতুন খবরের শিরোনাম: {title}
+নতুন খবরের বিবরণ: {summary}
+
+সম্প্রতি পোস্ট হওয়া খবরের তালিকা (ডুপ্লিকেট চেকের জন্য):
+{recent_posted_list}
 
 নিয়ম (অবশ্যই মানতে হবে):
-- is_crypto: খবরটি যদি ক্রিপ্টোকারেন্সি (Bitcoin, Ethereum, Altcoins, Token, DeFi, Web3, NFT, Stablecoin, Exchange, Mining, Whale/Wallet ট্রান্সফার, Crypto Hack/Scam, ETF, SEC/CFTC রেগুলেশন) অথবা ক্রিপ্টো বাজারে প্রভাব ফেলে এমন মার্কিন অর্থনীতি/ফেডারেল রিজার্ভ/সুদের হার/মুদ্রাস্ফীতি/শুল্ক/ডলার বা ট্রাম্পের ক্রিপ্টো/অর্থনৈতিক বক্তব্য সম্পর্কিত হয়, তবে "is_crypto": true দাও (ছোট বা মাইনর ক্রিপ্টো খবর হলেও true)। কিন্তু খবরটি যদি ক্রিপ্টো বা অর্থনীতির সাথে সম্পূর্ণ সম্পর্কহীন সাধারণ রাজনীতি/নির্বাচন (যেমন ব্রাজিল বা অন্য দেশের সাধারণ নির্বাচন, পুলিশ মোতায়েন, খেলাধুলা, বিনোদন বা ক্রিপ্টো-বিহীন সাধারণ প্রযুক্তি) হয়, তবে "is_crypto": false দাও।
-- is_crypto যদি false হয়, তবে headline_bn খালি স্ট্রিং "" রাখো।
-- is_crypto যদি true হয়, তবে headline_bn ঠিক {min_chars}–{max_chars} অক্ষরের হবে (বাংলা) এবং খবরের মূল ঘটনা সংক্ষেপে বলবে (যদি কোনো অর্থনৈতিক ইভেন্ট, সুদের হার বা গুরুত্বপূর্ণ ভাষণের খবর হয়, তবে মূল কথার পাশাপাশি মার্কেটে বুলিশ বা বিয়ারিশ কী প্রভাব পড়তে পারে তাও উল্লেখ করবে)।
+- is_duplicate: নতুন খবরটি যদি উপরের "সম্প্রতি পোস্ট হওয়া খবরের তালিকা"-র যেকোনো একটি খবরের একই ঘটনা, একই ঘোষণা বা একই বিষয়ের পুনরাবৃত্তি হয় (ভিন্ন ওয়েবসাইট বা ভিন্ন শব্দে লেখা হলেও, যেমন একই কোম্পানির একই পরিমাণ টোকেন বাইব্যাক/ট্রান্সফার/ইটিএফ ফ্লো), তবে অবশ্যই "is_duplicate": true দাও। সম্পূর্ণ নতুন বা ভিন্ন ঘটনা হলে "is_duplicate": false দাও।
+- is_crypto: খবরটি যদি ক্রিপ্টোকারেন্সি (Bitcoin, Ethereum, Altcoins, Token, DeFi, Web3, NFT, Stablecoin, Exchange, Mining, Whale/Wallet ট্রান্সফার, Crypto Hack/Scam, ETF, SEC/CFTC রেগুলেশন) অথবা ক্রিপ্টো বাজারে প্রভাব ফেলে এমন মার্কিন অর্থনীতি/ফেডারেল রিজার্ভ/সুদের হার/মুদ্রাস্ফীতি/শুল্ক/ডলার বা ট্রাম্পের ক্রিপ্টো/অর্থনৈতিক বক্তব্য সম্পর্কিত হয়, তবে "is_crypto": true দাও। কিন্তু ক্রিপ্টো বা অর্থনীতির সাথে সম্পর্কহীন সাধারণ রাজনীতি/নির্বাচন/খেলাধুলা হলে "is_crypto": false দাও।
+- যদি is_duplicate: true অথবা is_crypto: false হয়, তবে headline_bn খালি স্ট্রিং "" রাখো।
+- যদি দুটোই পাশ করে (is_crypto: true এবং is_duplicate: false), তবে headline_bn ঠিক {min_chars}–{max_chars} অক্ষরের হবে (বাংলা) এবং খবরের মূল ঘটনা সংক্ষেপে বলবে (অর্থনৈতিক ইভেন্ট বা সুদের হারের খবর হলে মার্কেটে বুলিশ বা বিয়ারিশ কী প্রভাব পড়তে পারে তাও উল্লেখ করবে)।
 - sentiment: বাজার/খবরের প্রভাব অনুযায়ী শুধু একটি — "BULLISH", "BEARISH" বা "NEUTRAL"।
 - emoji: খবরের বিষয়ের সাথে মানানসই একটি ইমোজি।
 
 শুধু এবং শুধু নিচের JSON ফরম্যাটে উত্তর দাও, কোনো অতিরিক্ত লেখা, মার্কডাউন বা কোড-ফেন্স নয়:
-{{"is_crypto": true, "sentiment": "BULLISH|BEARISH|NEUTRAL", "headline_bn": "...", "emoji": "..."}}
+{{"is_crypto": true, "is_duplicate": false, "sentiment": "BULLISH|BEARISH|NEUTRAL", "headline_bn": "...", "emoji": "..."}}
 """
 
 _REWRITE_INSTRUCTION = """
@@ -998,12 +1002,11 @@ def _call_gemini(model_name: str, prompt: str) -> str:
 
 
 def _parse_headline_json(raw: str) -> Optional[Dict[str, Any]]:
-    """Gemini-র রেসপন্স থেকে JSON বের করে যাচাই করে দেয়।
-    কোড-ফেন্স (```json ...) থাকলেও চলবে; ভাঙা JSON/সংখ্যা ভুল হলে None।"""
+    """Gemini-র রেসপন্স থেকে JSON বের করে যাচাই করে দেয়।"""
     if not raw:
         return None
     text = raw.strip()
-    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text)   # ফেন্স সরাও
+    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text)
     m = re.search(r"\{.*\}", text, re.S)
     if not m:
         return None
@@ -1014,44 +1017,62 @@ def _parse_headline_json(raw: str) -> Optional[Dict[str, Any]]:
     if not isinstance(data, dict):
         return None
 
+    is_dup_raw = data.get("is_duplicate", False)
+    if is_dup_raw is True or str(is_dup_raw).strip().lower() == "true":
+        return {"is_crypto": True, "is_duplicate": True, "sentiment": "NEUTRAL", "headline_bn": "", "emoji": "⚪"}
+
     is_crypto_raw = data.get("is_crypto", True)
     if is_crypto_raw is False or str(is_crypto_raw).strip().lower() == "false":
-        return {"is_crypto": False, "sentiment": "NEUTRAL", "headline_bn": "", "emoji": "⚪"}
+        return {"is_crypto": False, "is_duplicate": False, "sentiment": "NEUTRAL", "headline_bn": "", "emoji": "⚪"}
 
     headline = str(data.get("headline_bn", "")).strip()
     if not headline:
         return None
     sentiment = str(data.get("sentiment", "")).strip().upper()
     if sentiment not in SENTIMENT_EMOJI:
-        sentiment = "NEUTRAL"          # ভুল/অনুপস্থিত হলে নিরপেক্ষ
+        sentiment = "NEUTRAL"
     emoji = str(data.get("emoji", "")).strip()
     if not emoji or len(emoji) > 8:
-        # খালি/বিশাল ইমোজি হলে সেন্টিমেন্ট-ডিফল্ট — ভুল/বিড়বিড় ইমোজি
-        # (যেমন পুরো লেখা) ক্যাপশনে যেন না বসে
         emoji = SENTIMENT_EMOJI[sentiment]
     return {
         "is_crypto": True,
+        "is_duplicate": False,
         "sentiment": sentiment,
         "headline_bn": headline,
         "emoji": emoji,
     }
 
 
-def generate_bengali_headline(item: NewsItem) -> Tuple[str, Optional[Dict[str, Any]]]:
-    """প্রতিটি fresh আইটেমের জন্য Gemini কল করে (প্রতি কলের আগে ৩–৫ সেকেন্ড
-    random delay) বাংলা হেডলাইন/সেন্টিমেন্ট/ইমোজি বানায়।
+def _get_recent_posted_context(conn, limit: int = 15) -> str:
+    """সম্প্রতি পোস্ট হওয়া সর্বশেষ ১৫টি খবরের ইংরেজি শিরোনাম ও বাংলা হেডলাইন দেয়
+    যাতে Gemini নিজেও ১০০% নির্ভুলভাবে ডুপ্লিকেট খবর চিনতে পারে।"""
+    if conn is None:
+        return "(কোনো পূর্ববর্তী পোস্ট নেই)"
+    try:
+        rows = conn.execute(
+            "SELECT title_orig, headline_bn FROM posted_items "
+            "WHERE posted = 1 ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        if not rows:
+            return "(কোনো পূর্ববর্তী পোস্ট নেই)"
+        out = []
+        for idx, (t_orig, h_bn) in enumerate(rows, 1):
+            out.append(f"{idx}. EN: {(t_orig or '')[:140]} | BN: {(h_bn or '')[:140]}")
+        return "\n".join(out)
+    except Exception:
+        return "(কোনো পূর্ববর্তী পোস্ট নেই)"
 
-    রিটার্ন: (status, data)
-      - "ok"           → data = {sentiment, headline_bn, emoji}  (পোস্টযোগ্য)
-      - "format_failed"→ API চলেছিল কিন্তু ৩+৩ বার চেষ্টাও length/JSON মিলাতে
-                          পারেনি — আইটেমটি বাদ পড়বে (DB-তে posted=0 হিসেবে সেভ)
-      - "api_failed"   → সব API কল ব্যর্থ (কোটা/নেট) — পরের সাইকেলে আবার চেষ্টা হবে
-                          (DB-তে কিছু সেভ হয় না, ফ্রেশনেস উইন্ডো থাকা অবধি)
-    """
+
+def generate_bengali_headline(item: NewsItem, conn=None) -> Tuple[str, Optional[Dict[str, Any]]]:
+    """প্রতিটি fresh আইটেমের জন্য Gemini কল করে বাংলা হেডলাইন/সেন্টিমেন্ট/ইমোজি বানায়
+    এবং একই সাথে AI-ভিত্তিক ডুপ্লিকেট ও নন-ক্রিপ্টো চেক সম্পন্ন করে।"""
+    recent_list = _get_recent_posted_context(conn, limit=15)
     prompt_base = _HEADLINE_SYSTEM_PROMPT.format(
         source=f"{item.source_name} ({item.source_type})",
         title=item.title[:400],
         summary=(item.summary or item.title)[:1200],
+        recent_posted_list=recent_list,
         min_chars=Config.HEADLINE_MIN_CHARS,
         max_chars=Config.HEADLINE_MAX_CHARS,
     )
@@ -1060,17 +1081,13 @@ def generate_bengali_headline(item: NewsItem) -> Tuple[str, Optional[Dict[str, A
         max_chars=Config.HEADLINE_MAX_CHARS,
     )
 
-    # প্রাইমারি মডেল, তারপর ফলব্যাক মডেল (কোটা/রেটলিমিট এড়ানোর জন্য)
     models = [Config.GEMINI_TEXT_MODEL]
     if Config.GEMINI_FALLBACK_MODEL and Config.GEMINI_FALLBACK_MODEL != Config.GEMINI_TEXT_MODEL:
         models.append(Config.GEMINI_FALLBACK_MODEL)
 
     saw_api_success = False
     for model_name in models:
-        # সর্বোচ্চ ৩ বার চেষ্টা: ১ম সাধারণ প্রম্পট, পরেরগুলো "Rewrite it strictly
-        # between X and Y characters" নির্দেশনা যোগ করে
         for attempt in range(3):
-            # রেটলিমিট বাঁচাতে প্রতিটি Gemini কলের আগে random delay
             time.sleep(random.uniform(
                 Config.AI_CALL_MIN_DELAY, Config.AI_CALL_MAX_DELAY
             ))
@@ -1078,7 +1095,6 @@ def generate_bengali_headline(item: NewsItem) -> Tuple[str, Optional[Dict[str, A
             try:
                 raw = _call_gemini(model_name, prompt)
             except Exception as e:
-                # API ব্যর্থ (কোটা/রেটলিমিট/নেট) → পরের মডেল (ফলব্যাক) দেখো
                 log.warning("Gemini API ব্যর্থ (মডেল=%s, চেষ্টা=%d): %s",
                             model_name, attempt + 1, e)
                 break
@@ -1088,18 +1104,17 @@ def generate_bengali_headline(item: NewsItem) -> Tuple[str, Optional[Dict[str, A
             if parsed is None:
                 log.info("Gemini JSON পারলাম না (মডেল=%s) — আবার চেষ্টা", model_name)
                 continue
+            if parsed.get("is_duplicate", False):
+                return "ai_duplicate", None
             if not parsed.get("is_crypto", True):
                 return "not_crypto", None
 
             n = len(parsed["headline_bn"])
             if Config.HEADLINE_MIN_CHARS <= n <= Config.HEADLINE_MAX_CHARS:
                 return "ok", parsed
-            # দৈর্ঘ্য সীমার বাইরে → "Rewrite it strictly between X and Y characters"
             log.info("হেডলাইন দৈর্ঘ্য বাইরে: %d অক্ষর (মডেল=%s) — আবার লেখাচ্ছি", n, model_name)
         else:
-            # for-else: ৩টা চেষ্টা API error ছাড়া শেষ হলে — ফলব্যাক মডেল দেখো
             continue
-        # এখানে আসলে break হয়েছে (API ব্যর্থ) → পরের মডেল
 
     if saw_api_success:
         return "format_failed", None
@@ -1107,9 +1122,11 @@ def generate_bengali_headline(item: NewsItem) -> Tuple[str, Optional[Dict[str, A
 
 
 # =============================================================================
-# ৪.৬ ডুপ্লিকেট চেক — দুই স্তর
-# (১) লিংক-হ্যাশ: আগে প্রসেস হওয়া লিংক (পোস্ট হোক বা বাদ পড়ুক) আর নেওয়া হবে না
-# (২) সেমান্টিক সিমিলারিটি: সর্বশেষ ৫০ পোস্টকরা হেডলাইনের সাথে TF-IDF + cosine
+# ৪.৬ ডুপ্লিকেট চেক — ৪ স্তরের কঠোর সুরক্ষা
+# (১) লিংক-হ্যাশ (link_already_processed)
+# (২) ইংরেজি শিরোনাম + সংখ্যা/এনটিটি ওভারল্যাপ (title_is_duplicate)
+# (৩) বাংলা শব্দ + ক্যারেক্টার এন-গ্রাম সিমিলারিটি (is_similar_to_recent)
+# (৪) Gemini AI সেমান্টিক ডুপ্লিকেট চেক (generate_bengali_headline-এ)
 # =============================================================================
 def link_already_processed(conn, link_hash: str) -> bool:
     """posted_items-এ এই লিংক-হ্যাশ আগে থেকেই আছে কিনা (পোস্ট হোক বা বাদ পড়ুক)।"""
@@ -1121,11 +1138,7 @@ def link_already_processed(conn, link_hash: str) -> bool:
 
 
 def record_item(conn, item: NewsItem, headline: str, posted: int) -> None:
-    """নিউজ আইটেমের ফলাফল DB-তে সেভ — posted=1 পোস্ট হয়েছে,
-    posted=0 ডুপ্লিকেট/ফরম্যাট-ব্যর্থ বলে বাদ পড়েছে। UNIQUE হওয়ায়
-    একই লিংক দুইবার এসেলেও দ্বিতীয়বার ইগনোর হয়।
-    title_orig-এ সোর্সের মূল (ইংরেজি) শিরোনাম সেভ হয় — পরে
-    title_is_duplicate সেটাই দিয়ে ৭০%+ মিল ধরে।"""
+    """নিউজ আইটেমের ফলাফল DB-তে সেভ।"""
     try:
         conn.execute(
             "INSERT OR IGNORE INTO posted_items "
@@ -1139,7 +1152,6 @@ def record_item(conn, item: NewsItem, headline: str, posted: int) -> None:
         log.warning("DB সেভ ব্যর্থ: %s", e)
 
 
-# ---- ডুপ্লিকেটের তিন স্তরের মধ্যে ২ নম্বর: ইংরেজি মূল শিরোনামের ৭০%+ মিল ----
 _TITLE_STOPWORDS = {
     "the", "and", "for", "with", "from", "that", "this", "after", "before",
     "over", "into", "will", "are", "was", "were", "has", "have", "its", "but",
@@ -1149,47 +1161,41 @@ _TITLE_STOPWORDS = {
     "could", "would", "should", "about", "above", "below", "between", "during",
     "under", "again", "there", "here", "each", "other", "while", "both", "few",
     "many", "much", "any", "all", "one", "two", "three", "top", "new", "amid",
-    "per", "vs", "now", "says", "said", "over",
+    "per", "vs", "now", "says", "said", "roughly", "nearly", "around", "up",
+    "down", "out", "off", "via", "amidst", "line", "lines", "gets", "get",
 }
 
 
 def _title_tokens(title: str) -> set:
     """শিরোনাম থেকে তুলনাযোগ্য টোকেন সেট বানায়:
-    - ছোট হরফে রূপান্তর, সংখ্যাকে পুরো একক হিসেবে ("১১৩,০০০" → "113000")
-      রাখা হয় — আলাদা সংখ্যা মানে আলাদা ঘটনা (৬৬,০০০ বনাম ৬৭,০০০)
-    - শেষের বহুবচন 's' কাটা (inflows → inflow) — বিভিন্ন আউটলেটের ফরম্যাট মেলে
-    - সাধারণ ইংরেজি স্টপ-ওয়ার্ড বাদ, ন্যূনতম ৩ অক্ষর (সংখ্যা ≥ ২ অঙ্ক)
-    """
+    - '$15M' বা '15 million' উভয়কেই সংখ্যা '15' হিসেবে রাখে যাতে ভিন্ন আউটলেটের
+      ফরম্যাট সহজেই মেলে।
+    - বহুবচন 's'/'es' ও সাধারণ ক্রিয়া বিভক্তি নরমালাইজ করে।"""
     text = (title or "").lower()
     numbers = {n.replace(",", "").replace(".", "")
-               for n in re.findall(r"\d[\d,\.]*\d|\d", text)}
+               for n in re.findall(r"\d[\d,\.]*\d|\d+", text)}
     words_only = re.sub(r"\d[\d,\.]*", " ", text)
     tokens = set()
     for t in re.findall(r"[a-z]+", words_only):
+        if t in ("million", "millions", "billion", "billions", "usd"):
+            continue
         if len(t) > 3 and t.endswith("s") and not t[-2].isdigit():
             t = t[:-1]
         if t in _TITLE_STOPWORDS or len(t) < 3:
             continue
         tokens.add(t)
-    tokens |= {n for n in numbers if len(n) >= 2}
+    tokens |= {n for n in numbers if len(n) >= 1 and n not in ("1", "2", "3")}
     return tokens
 
 
 def title_is_duplicate(conn, title: str) -> bool:
-    """🔴 ডুপ্লিকেটের ২ নম্বর স্তর (ব্যবহারকারীর কঠোর নির্দেশ):
-    সর্বশেষ SIMILARITY_WINDOW টা পোস্টকরা (posted=1) খবরের মূল ইংরেজি
-    শিরোনামের সাথে এই শিরোনামের টোকেন-মিল **SIMILARITY_THRESHOLD (৭০%) বা
-    বেশি** হলে ডুপ্লিকেট — সেইড সেম খবর অন্য আউটলেট থেকে এসেছে বলে বাদ।
-
-    দুটো সুরক্ষা:
-      - ন্যূনতম ৫টা টোকেন না থাকলে সিদ্ধান্ত নেওয়া হয় না (কম তথ্যে ঝুঁকি নেই)
-      - সংখ্যা-গার্ড: দুই পাশেই সংখ্যা থাকলে একটাও না মিললে সেটা ভিন্ন ঘটনা
-        (যেমন ৬৬,০০০ বনাম ৬৭,০০০) — ডুপ্লিকেট ধরা হবে না
-
-    সব ফলাফল /data/news.db-তে সেভ থাকে — রিস্টার্ট/রিডিপ্লয়েও ইতিহাস মিলিয়ে দেয়।
-    """
+    """🔴 ডুপ্লিকেটের ২ নম্বর স্তর (উন্নত ইংরেজি শিরোনাম ও সংখ্যা-এনটিটি মিল):
+    ১) ছোট শিরোনামটির সাপেক্ষে ৫৫% (0.55) বা তার বেশি টোকেন মিললে ডুপ্লিকেট।
+    ২) অথবা দুটি শিরোনামে যদি একই সংখ্যা (যেমন '15' মিলিয়ন) থাকে এবং অন্তত ২টি
+       মূল শব্দ (যেমন 'hyperliquid', 'buyback', 'hype', 'usdc') মেলে → ১০০% একই খবর!
+    ৩) অথবা সংখ্যা না থাকলেও যদি ৪টি বা তার বেশি মূল শব্দ হুবহু মিলে যায় → ডুপ্লিকেট!"""
     cand = _title_tokens(title)
-    if len(cand) < 5:
+    if len(cand) < 3:
         return False
     rows = conn.execute(
         "SELECT title_orig FROM posted_items WHERE posted = 1 "
@@ -1197,37 +1203,66 @@ def title_is_duplicate(conn, title: str) -> bool:
         "ORDER BY id DESC LIMIT ?",
         (Config.SIMILARITY_WINDOW,),
     ).fetchall()
-    cand_digits = {t for t in cand if t.isdigit() and len(t) >= 3}
+    cand_digits = {t for t in cand if t.isdigit()}
+    cand_words = cand - cand_digits
+
     for (stored_title,) in rows:
         stored = _title_tokens(stored_title)
         if not stored:
             continue
-        overlap = len(cand & stored)
-        if overlap < len(cand) * Config.SIMILARITY_THRESHOLD:
-            continue   # ৭০%-এর নিচে মিল → আলাদা খবর
-        # সংখ্যা-গার্ড: শুধু বড় সংখ্যা (≥৩ অঙ্ক — ৬৭০০০/১১৩০০০) তুলনা করা হয়;
-        # "12-month"-মতো ছোট সংখ্যা সাধারণ শব্দ, ওগুলো দিয়ে গার্ড ভাঙবে না।
-        # দুই পাশেই বড় সংখ্যা থাকলে একটাও না মিললে = আলাদা ঘটনা (৬৭k বনাম ১১৩k)
-        stored_digits = {t for t in stored if t.isdigit() and len(t) >= 3}
+        stored_digits = {t for t in stored if t.isdigit()}
+        stored_words = stored - stored_digits
+
+        # সংখ্যা-গার্ড: দুই পাশেই সংখ্যা থাকলে এবং একটাও সংখ্যা না মিললে আলাদা ঘটনা (যেমন 65000 বনাম 85000)
         if cand_digits and stored_digits and cand_digits.isdisjoint(stored_digits):
             continue
-        return True
+
+        word_overlap = len(cand_words & stored_words)
+        total_overlap = len(cand & stored)
+        min_len = max(1, min(len(cand), len(stored)))
+
+        # শর্ত ক: একই সংখ্যা + অন্তত ২টি মূল শব্দ মিলে গেছে (যেমন Hyperliquid + $15M + HYPE/buyback)
+        if cand_digits and stored_digits and not cand_digits.isdisjoint(stored_digits) and word_overlap >= 2:
+            return True
+
+        # শর্ত খ: ৪টি বা তার বেশি মূল শব্দ মিলে গেছে
+        if word_overlap >= 4:
+            return True
+
+        # শর্ত গ: ছোট শিরোনামটির অন্তত ৫৫% টোকেন মিলে গেছে
+        if total_overlap / min_len >= 0.55:
+            return True
+
     return False
 
 
-def is_similar_to_recent(conn, headline: str) -> bool:
-    """🔴 ডুপ্লিকেটের ৩ নম্বর স্তর: সর্বশেষ SIMILARITY_WINDOW (১০০) টা
-    পোস্টকরা (posted=1) বাংলা হেডলাইনের সাথে TF-IDF vectorize + cosine
-    similarity; কোনো একটার সাথে মিল SIMILARITY_THRESHOLD (৭০%) বা বেশি
-    হলে ডুপ্লিকেট ধরে বাদ দেয় (DB-তে posted=0 হিসেবে সেভ থাকে)।"""
-    if not _SKLEARN_OK:
-        # sklearn না থাকলে সিমিলারিটি চেক চালু হবে না — লিংক-হ্যাশ ডুপ্লিকেট
-        # চেক তবু কাজ করবে (একবারই লগ হবে)
-        if not getattr(is_similar_to_recent, "_warned", False):
-            log.warning("scikit-learn নেই — সেমান্টিক ডুপ্লিকেট চেক বন্ধ থাকবে")
-            is_similar_to_recent._warned = True
-        return False
+_BN_STOPWORDS = {
+    "জন্য", "দিয়ে", "দিয়ে", "করে", "করেছে", "করবে", "করতে", "হয়েছে", "হয়েছে",
+    "হবে", "যা", "এবং", "ও", "বা", "থেকে", "সাথে", "একটি", "এই", "প্রায়",
+    "প্রায়", "মধ্যে", "উপর", "ওপর", "পরে", "আগে", "বলে", "বলেছে", "রয়েছে",
+    "রয়েছে", "পারে", "নিয়ে", "নিয়ে", "বড়", "বড়", "নতুন", "গুরুত্বপূর্ণ",
+}
 
+
+def _bn_meaningful_tokens(text: str) -> set:
+    """বাংলা হেডলাইন থেকে কার-চিহ্ন অক্ষুণ্ণ রেখে অর্থবহ শব্দ ও সংখ্যার সেট বের করে।
+    (scikit-learn এর ডিফল্ট রেজেক্স বাংলা কার-চিহ্নে শব্দ ভেঙে ফেলে বলে এই কাস্টম টোকেনাইজার জরুরি)।"""
+    cleaned = re.sub(r"[।,;:!?()\[\]{}\"'—–\-/\\|+=$%]", " ", text or "")
+    out = set()
+    for w in cleaned.split():
+        w = w.strip()
+        if len(w) < 2 or w in _BN_STOPWORDS:
+            continue
+        out.add(w)
+    return out
+
+
+def is_similar_to_recent(conn, headline: str) -> bool:
+    """🔴 ডুপ্লিকেটের ৩ নম্বর স্তর (বাংলা হেডলাইন শব্দ-ওভারল্যাপ + TF-IDF):
+    সর্বশেষ SIMILARITY_WINDOW (১০০) টা পোস্টকরা বাংলা হেডলাইনের সাথে তুলনা করে:
+      ১) যদি ৪টি বা তার বেশি অর্থবহ বাংলা শব্দ মিলে যায় (যেমন 'হাইপারলিকুইড', '১৫', 'মিলিয়ন', 'টোকেন', 'বাইব্যাকের'), তবে সাথে সাথে ডুপ্লিকেট!
+      ২) অথবা ৪০%+ বাংলা অর্থবহ শব্দ মিলে গেলে ডুপ্লিকেট!
+      ৩) অথবা কাস্টম বাংলা টোকেনাইজারসহ TF-IDF cosine similarity >= 0.55 হলে ডুপ্লিকেট!"""
     rows = conn.execute(
         "SELECT headline_bn FROM posted_items WHERE posted = 1 "
         "ORDER BY id DESC LIMIT ?",
@@ -1236,14 +1271,30 @@ def is_similar_to_recent(conn, headline: str) -> bool:
     if not rows:
         return False
 
-    corpus = [r[0] for r in rows if r[0]] + [headline]
+    cand_bn = _bn_meaningful_tokens(headline)
+    past_headlines = [r[0] for r in rows if r[0]]
+
+    for past in past_headlines:
+        past_bn = _bn_meaningful_tokens(past)
+        if not past_bn or not cand_bn:
+            continue
+        common = cand_bn & past_bn
+        if len(common) >= 4:
+            return True
+        if len(common) / max(1, min(len(cand_bn), len(past_bn))) >= 0.40:
+            return True
+
+    if not _SKLEARN_OK:
+        return False
+
+    corpus = past_headlines + [headline]
     if len(corpus) < 2:
         return False
     try:
-        vectorizer = TfidfVectorizer()
-        matrix = vectorizer.fit_transform(corpus)   # শেষটা = নতুন হেডলাইন
+        vectorizer = TfidfVectorizer(token_pattern=r"[^\s।,;:!?()\[\]{}\"'—–\-]+")
+        matrix = vectorizer.fit_transform(corpus)
         sims = cosine_similarity(matrix[-1:], matrix[:-1]).flatten()
-        return bool(len(sims)) and float(max(sims)) >= Config.SIMILARITY_THRESHOLD
+        return bool(len(sims)) and float(max(sims)) >= 0.55
     except Exception as e:
         log.warning("সিমিলারিটি চেক ব্যর্থ: %s", e)
         return False
@@ -1255,13 +1306,9 @@ def is_similar_to_recent(conn, headline: str) -> bool:
 # POLLINATIONS_WATERMARK_CROP_PX পিক্সেল ক্রপ করে অবশিষ্ট ওয়াটারমার্ক সরানো হয়
 # =============================================================================
 def generate_ai_image_bytes(item: NewsItem, headline: str) -> Optional[bytes]:
-    """Pollinations.ai থেকে AI ছবি নামিয়ে ওয়াটারমার্ক ক্রপ করে PNG bytes দেয়।
-    🔴 নতুন: ৫০০/টাইমআউট হলে সর্বোচ্চ ২ বার আবার চেষ্টা (২–৪ সে. গ্যাপ);
-    প্রতিটি রেসপন্স PIL দিয়ে যাচাই (ব্রোকেন/HTML ধরা পড়ে)।
-    সব চেষ্টা ব্যর্থ হলে None — কলার শুধু টেক্সট পাঠাবে, খবর আটকবে না।"""
+    """Pollinations.ai থেকে AI ছবি নামিয়ে ওয়াটারমার্ক ক্রপ করে PNG bytes দেয়।"""
     if not Config.ENABLE_AI_IMAGE:
         return None
-    # প্রম্পটে মূল খবরের ইংরেজি শিরোনাম ব্যবহার করি (flux মডেল ইংরেজিতে ভালো)
     prompt = (
         "professional cryptocurrency news editorial illustration, "
         "dark modern financial style, dramatic lighting, high detail, "
@@ -1273,25 +1320,23 @@ def generate_ai_image_bytes(item: NewsItem, headline: str) -> Optional[bytes]:
         f"&height={Config.POLLINATIONS_HEIGHT}"
         f"&{Config.POLLINATIONS_EXTRA_PARAMS}"
     )
-    for attempt in range(3):           # ১ বার চেষ্টা + ২ বার রিট্রাই
+    for attempt in range(3):
         if attempt:
-            time.sleep(random.uniform(2, 4))   # সার্ভারকে সামান্য সময় দেওয়া
+            time.sleep(random.uniform(2, 4))
         try:
             resp = requests.get(url, timeout=120, headers=HTTP_HEADERS)
             resp.raise_for_status()
 
             img = Image.open(io.BytesIO(resp.content))
-            img.load()                 # ভাঙা/ইনভ্যালিড রেসপন্স এখানেই ধরা
+            img.load()
             img = img.convert("RGB")
             w, h = img.size
             if w < 64 or h < 64:
                 raise ValueError(f"AI ছবি অতি ছোট ({w}x{h})")
-            # নিচের POLLINATIONS_WATERMARK_CROP_PX পিক্সেল ক্রপের পরেও রেশিও
-            # ঠিক ৪:৩ হয়ে যায় তাই আবার ফিট করা হয় (নিয়ম: সব নিউজ ছবি ৪:৩)
             crop_px = Config.POLLINATIONS_WATERMARK_CROP_PX
             if crop_px > 0 and h > crop_px + 64:
                 img = img.crop((0, 0, w, h - crop_px))
-            img = _fit_image_to_4_3(img)    # 🔴 ঠিক ৪:৩ (1280×960)
+            img = _fit_image_to_4_3(img)
 
             buf = io.BytesIO()
             img.save(buf, format="PNG")
@@ -1303,17 +1348,11 @@ def generate_ai_image_bytes(item: NewsItem, headline: str) -> Optional[bytes]:
 
 
 # =============================================================================
-# ৪.৮ ক্যাপশন ফরম্যাট (HTML parse_mode) — হুবহু স্পেসিফিকেশন অনুযায়ী
-#   {emoji} <b>{headline_bn}</b>
-#   📊 MARKET HINT: {sentiment} {sentiment_emoji}
-#   🌐 Source: Click Here        ← শুধু RSS আইটেমের জন্য
-#   🔔 Follow: CRYPTO UPDATE    ← মাঝে কোলন; শুধু CRYPTO UPDATE ক্লিকেবল
+# ৪.৮ ক্যাপশন ফরম্যাট (HTML parse_mode)
 # =============================================================================
 def build_news_caption(headline: str, sentiment: str, emoji: str,
                        item: NewsItem) -> str:
-    """নিউজ পোস্টের ক্যাপশন HTML স্ট্রিং বানায়।
-    হেডলাইন ও URL html.escape করা হয় — Telegram HTML parse ভাঙলে পুরো পোস্ট
-    ব্যর্থ হয়, তাই বিশেষ চিহ্ন (<, >, &, ") আগেই নিরাপদ করা।"""
+    """নিউজ পোস্টের ক্যাপশন HTML স্ট্রিং বানায়।"""
     safe_headline = html_escape(headline)
     sentiment_emoji = SENTIMENT_EMOJI.get(sentiment, "⚪")
 
@@ -1322,12 +1361,9 @@ def build_news_caption(headline: str, sentiment: str, emoji: str,
         "",
         f"📊 <b>MARKET HINT:</b> <b>{sentiment}</b> {sentiment_emoji}",
     ]
-    # সোর্স লাইন শুধু RSS আইটেমের জন্য — Telegram আইটেমে এই লাইন বাদ
     if item.source_type == "rss":
         lines += ["", f'🌐 <b>Source:</b> <a href="{html_escape(item.link)}">'
                        f'Click Here</a>']
-    # শেষ লাইন: "Follow: CRYPTO UPDATE" — মাঝে কোলন; শুধু CRYPTO UPDATE অংশেই
-    # ক্লিকেবল লিংক (<a> ট্যাগের ভেতরে), "Follow:" সাধারণ লেখা — ওতে চাপ দিলে কিছু হবে না
     lines += ["", f'🔔 <b>Follow: <a href="{html_escape(Config.FOLLOW_CHANNEL_URL)}">'
                    f'CRYPTO UPDATE</a></b>']
     return "\n".join(lines)
@@ -1346,15 +1382,9 @@ def dedupe_urls(urls: List[str]) -> List[str]:
 
 # =============================================================================
 # ৪.৭ ছবি নির্বাচন + পোস্ট — সবসময় সর্বোচ্চ ১টা ছবি, কখনো অ্যালবাম নয়
-#   ১) সোর্সে ছবি থাকলে প্রথমটা (URL থেকে)
-#   ২) না থাকলে/ব্যর্থ হলে AI ছবি (Pollinations + ওয়াটারমার্ক ক্রপ)
-#   ৩) দুটোই ব্যর্থ হলে শুধু টেক্সট
 # =============================================================================
 def _fit_image_to_4_3(img: Image.Image) -> Image.Image:
-    """নিউজ ছবিকে ঠিক **৪:৩ রেশিওতে** আনে (কভার-স্টাইল মাঝ-ক্রপ + স্কেল)।
-    চওড়া NEWS_IMAGE_WIDTH (1280) পর্যন্ত; ছোট ছবিতে আপস্কেল না করে নিজের
-    চওড়া অনুযায়ী ৪:৩ বানানো হয় (উচ্চতা = চওড়া × ৩/৪, তাই রেশিও কখনোই
-    বিকৃত হয় না)। প্রতিটি নিউজ ছবি (সোর্স বা AI) এই ফাংশন দিয়ে যায়।"""
+    """নিউজ ছবিকে ঠিক ৪:৩ রেশিওতে আনে।"""
     img = img.convert("RGB")
     w, _h = img.size
     tw = Config.NEWS_IMAGE_WIDTH if w >= Config.NEWS_IMAGE_WIDTH \
@@ -1364,12 +1394,7 @@ def _fit_image_to_4_3(img: Image.Image) -> Image.Image:
 
 
 def _download_image_bytes(url: str) -> Optional[Tuple[bytes, str, str]]:
-    """সোর্সের ছবি URL নিজে ডাউনলোড করে, **৪:৩ রেশিওতে ফিট** করে
-    (JPEG bytes, mime, ফাইলনেম) দেয়। সোর্স ছবি সরাসরি URL দিয়ে পাঠানো হয় না —
-    URL-এ রেশিও নিয়ন্ত্রণ করা যায় না, আর নিয়ম হলো প্রতিটি নিউজ ছবি ৪:৩।
-    ব্যর্থ হলে None (কলার AI ছবি/টেক্সটে যাবে)।
-    যাচাই (নতুন): Content-Type ছবি নয় → বাদ; খুব ছোট ছবি (ফেভিকন/আইকন) → বাদ;
-    ব্রোকেন/ট্রানকেটে ফাইল → PIL ধরে ফেলে। ভুল ছবি চ্যানেলে যাওয়া বন্ধ।"""
+    """সোর্সের ছবি URL ডাউনলোড করে ৪:৩ রেশিওতে ফিট করে দেয়।"""
     try:
         r = requests.get(url, timeout=20, headers=HTTP_HEADERS)
         r.raise_for_status()
@@ -1378,15 +1403,14 @@ def _download_image_bytes(url: str) -> Optional[Tuple[bytes, str, str]]:
             log.info("Content-Type ছবি নয় (%s) — সোর্স ছবি বাদ: %s", ct, url)
             return None
         img = Image.open(io.BytesIO(r.content))
-        img.load()                      # ভাঙা/ভুল ফাইল হলে এখানেই এক্সেপশন
+        img.load()
         if min(img.size) < 200:
-            # ফেভিকন/ক্ষুদ্র আইকন খবরের ছবি নয় — এগুলো পাঠালে "ভুল ছবি" হয়
             log.info("সোর্স ছবি খুব ছোট (%dx%d) — বাদ: %s",
                      img.size[0], img.size[1], url)
             return None
-        img = _fit_image_to_4_3(img)    # 🔴 ঠিক ৪:৩
+        img = _fit_image_to_4_3(img)
         buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=88)   # ছোট ফাইল, mime স্পষ্ট
+        img.save(buf, format="JPEG", quality=88)
         return buf.getvalue(), "image/jpeg", "source.jpg"
     except Exception as e:
         log.debug("সোর্স ছবি ডাউনলোড ব্যর্থ (%s): %s", url, e)
@@ -1395,15 +1419,9 @@ def _download_image_bytes(url: str) -> Optional[Tuple[bytes, str, str]]:
 
 def post_news_item(item: NewsItem, headline: str, sentiment: str,
                    emoji: str) -> Optional[int]:
-    """ক্যাপশন বানিয়ে ছবি/টেক্সট পাথে চ্যানেলে পোস্ট করে — সফল হলে
-    message_id ফেরত (ন্যাচারাল পোস্টের অটো-ডিলিটে লাগে), ব্যর্থ হলে None।
-    ধাপ: ① সোর্সের প্রথম ছবি ডাউনলোড করে ৪:৩ ফিট → ② ফেল হলে AI ছবি (৪:৩)
-    → ③ শুধু টেক্সট। সব ছবিই ঠিক ৪:৩ রেশিওতে যায়।"""
+    """ক্যাপশন বানিয়ে ছবি/টেক্সট পাথে চ্যানেলে পোস্ট করে।"""
     caption = build_news_caption(headline, sentiment, emoji, item)
 
-    # ১) সোর্সের নিজস্ব ছবি — ডাউনলোড করে ঠিক ৪:৩ রেশিওতে ফিট করে পাঠানো হয়।
-    #    সরাসরি URL পাঠানো হয় না, কারণ URL-এ রেশিও নিয়ন্ত্রণ করা যায় না —
-    #    নিয়ম: প্রতিটি নিউজ ছবি অবশ্যই ৪:৩ (সর্বোচ্চ ১টা ছবি, কখনো অ্যালবাম নয়)।
     source_images = dedupe_urls(item.images)
     if source_images:
         downloaded = _download_image_bytes(source_images[0])
@@ -1416,7 +1434,6 @@ def post_news_item(item: NewsItem, headline: str, sentiment: str,
                 return mid
         log.warning("সোর্স ছবি ডাউনলোড/পাঠানো ব্যর্থ — AI ছবির দিকে যাচ্ছি")
 
-    # ২) AI ছবি
     if Config.ENABLE_AI_IMAGE:
         ai_bytes = generate_ai_image_bytes(item, headline)
         if ai_bytes:
@@ -1426,74 +1443,62 @@ def post_news_item(item: NewsItem, headline: str, sentiment: str,
                 return mid
             log.warning("AI ছবি পাঠানো যায়নি — শুধু টেক্সটে যাচ্ছি")
 
-    # ৩) শুধু টেক্সট (সর্বশেষ fallback)
     return send_text_message(caption, parse_mode="HTML")
 
 
 # =============================================================================
-# একটা আইটেম প্রসেস করার পুরো ধাপ: Gemini → ডুপ্লিকেট → পোস্ট → DB রেকর্ড
+# একটা আইটেম প্রসেস করার পুরো ধাপ: ৪-স্তরের ডুপ্লিকেট চেক → Gemini → পোস্ট → DB রেকর্ড
 # =============================================================================
 def handle_single_item(conn, item: NewsItem) -> None:
     """একটি fresh, নতুন লিংকের আইটেম নিয়ে পুরো সিদ্ধান্ত-প্রক্রিয়া চালায়।"""
-    # (০) 🔴 ডুপ্লিকেটের ১ম ফিল্টার (লিংক-হ্যাশ) তো run_cycle-এ হয়ে গেছে;
-    # এখানে ২য় ফিল্টার: ইংরেজি মূল শিরোনামের ৭০%+ মিল — এটা Gemini কলের
-    # আগে চলে তাই খরচ/সময় বাঁচে, এবং অন্য আউটলেট থেকে একই খবর এলে
-    # নিঃশর্তভাবে বাদ পড়ে (posted=0 হিসেবে DB-তে সেভ → আর প্রসেস হবে না)
+    # স্তর ২: ইংরেজি মূল শিরোনাম ও সংখ্যা-এনটিটি ডুপ্লিকেট চেক (Gemini কলের আগেই)
     if title_is_duplicate(conn, item.title):
         record_item(conn, item, item.title or "(শিরোনাম-ডুপ্লিকেট)", posted=0)
-        log.info("শিরোনাম-ডুপ্লিকেট (৭০%%+ মিল) — বাদ: %s", item.link)
+        log.info("শিরোনাম-ডুপ্লিকেট — বাদ: %s", item.link)
         return
 
-    status, data = generate_bengali_headline(item)
+    status, data = generate_bengali_headline(item, conn=conn)
 
     if status == "api_failed":
-        # Gemini সম্পূর্ণ ব্যর্থ — কিছু রেকর্ড করা হয় না, যাতে পরের সাইকেলে
-        # (ফ্রেশ থাকা অবধি) আবার চেষ্টা হয়
         log.warning("Gemini ব্যর্থ — আইটেম এবার স্কিপ: %s", item.link)
         return
 
+    if status == "ai_duplicate":
+        # স্তর ৪: Gemini AI শনাক্ত করেছে এটি আগের পোস্ট করা খবরের একই ঘটনা
+        record_item(conn, item, item.title or "(AI-ডুপ্লিকেট)", posted=0)
+        log.info("AI সেমান্টিক ডুপ্লিকেট — বাদ [%s]: %s", item.source_name, item.title[:80])
+        return
+
     if status == "not_crypto":
-        # নন-ক্রিপ্টো খবর (যেমন সাধারণ নির্বাচন/রাজনীতি) → posted=0 হিসেবে সেভ করে বাদ
         record_item(conn, item, item.title or "(নন-ক্রিপ্টো খবর)", posted=0)
         log.info("নন-ক্রিপ্টো খবর — বাদ [%s]: %s", item.source_name, item.title[:80])
         return
 
     if status == "format_failed":
-        # ৩+৩ বার চেষ্টাও হেডলাইন নিয়ম মেনেনি → আইটেটি চূড়ান্তভাবে বাদ;
-        # posted=0 হিসেবে সেভ যাতে আর যেন প্রসেস না হয়
         record_item(conn, item, item.title or "(হেডলাইন তৈরি ব্যর্থ)", posted=0)
         log.warning("হেডলাইন ফরম্যাট ব্যর্থ — বাদ: %s", item.link)
         return
 
     headline = data["headline_bn"]
 
-    # (১ক) "ন্যাচারাল"/নিরপেক্ষ (NEUTRAL) খবর — এখন পোস্ট হয়
-    # (Config.POST_NEUTRAL = True)। ভবিষ্যতে বাদ দিতে হলে সেটি False
-    # করলেই হবে — তখন DB-তে posted=0 সেভ থাকে, আর প্রসেস হবে না।
     if data["sentiment"] == "NEUTRAL" and not Config.POST_NEUTRAL:
         record_item(conn, item, headline, posted=0)
         log.info("নিউট্রাল সেন্টিমেন্ট (ন্যাচারাল) — বাদ: %s", item.link)
         return
 
-    # (২) সেমান্টিক ডুপ্লিকেট — মিল গেলে বাদ, কিন্তু posted=0 হিসেবে DB-তে
-    # সেভ থাকে যাতে পরের সাইকেলে আবার প্রসেস না হয়
+    # স্তর ৩: বাংলা অর্থবহ শব্দ ও কাস্টম বাংলা TF-IDF ডুপ্লিকেট চেক
     if is_similar_to_recent(conn, headline):
         record_item(conn, item, headline, posted=0)
-        log.info("সেমান্টিক ডুপ্লিকেট — বাদ: %s", item.link)
+        log.info("বাংলা সেমান্টিক ডুপ্লিকেট — বাদ: %s", item.link)
         return
 
-    # পোস্ট (ছবি নির্বাচন ও fallback সহ) — সফল হলে message_id ফেরত
     mid = post_news_item(item, headline, data["sentiment"], data["emoji"])
     if mid:
         record_item(conn, item, headline, posted=1)
-        # ন্যাচারাল (NEUTRAL) পোস্ট হলে বট নিজে ট্র্যাক করে রাখে —
-        # ১ ঘণ্টা পর সেটি অটো-ডিলিট হবে (delete_expired_natural_posts)
         if data["sentiment"] == "NEUTRAL":
             track_natural_post(conn, mid, link=item.link)
         log.info("✅ পোস্ট সফল [%s]: %s", item.source_name, headline[:80])
     else:
-        # পোস্ট ব্যর্থ (Telegram সমস্যা) — রেকর্ড করা হয় না, পরের সাইকেলে
-        # আবার চেষ্টা হবে (ফ্রেশ থাকা পর্যন্ত)
         log.warning("পোস্ট ব্যর্থ — পরে আবার চেষ্টা হবে: %s", item.link)
 
 
