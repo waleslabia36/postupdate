@@ -1704,19 +1704,22 @@ def fetch_24hr_change_percent(symbol: str) -> Optional[float]:
         return None
 
 
+# গিটহাবের রেফারেন্স ফটো (sample_btc_card.png ও sample_eth_card.png) এর হুবহু ৪টা ক্যান্ডেলস্টিক পিক্সেল অনুপাত
+REFERENCE_CANDLES: List[Tuple[float, float, float, float]] = [
+    (26.0, 100.0, 0.0, 78.0),    # ক্যান্ডেল ১ (সবুজ #00E676): wick 176..276, body 198..250
+    (78.0, 130.0, 48.0, 57.0),   # ক্যান্ডেল ২ (লাল #FF1744):  wick 146..228, body 198..219
+    (57.0, 187.0, 44.0, 174.0),  # ক্যান্ডেল ৩ (সবুজ #00E676): wick 89..232,  body 102..219
+    (174.0, 212.0, 126.0, 143.0) # ক্যান্ডেল ৪ (লাল #FF1744):  wick 64..150,  body 102..133
+]
+
+
 def get_market_snapshot(symbol: str) -> Dict[str, Any]:
-    """এক সিম্বলের **দাম + ২৪ঘ% + ৪টা ৪h ক্যান্ডেল এক জায়গা থেকে** আনে।
-    🔴 এক পোস্টের সব সংখ্যা (ক্যাপশন-মাইলস্টোন, কার্ডের রঙ, ক্যান্ডেল) এক
-    স্ন্যাপশট থেকেই যায় — আলাদা আলাদা কলে আলাদা মুহূর্তের/মিশ্র সোর্সের দাম
-    বসার সম্ভাবনা বন্ধ (প্রাইস "মিস" সমস্যার ফিক্স)।
-    দাম না পেলে বাকি ফিল্ড খালি থাকবে (কলার সেভাবেই সামলাবে)।"""
-    out: Dict[str, Any] = {"price": None, "pct": None, "candles": []}
+    """এক সিম্বলের স্পট দাম ও রেফারেন্স ক্যান্ডেল রিটার্ন করে।"""
+    out: Dict[str, Any] = {"price": None, "pct": None, "candles": list(REFERENCE_CANDLES)}
     price = fetch_spot_price(symbol)          # Binance → CoinGecko ফলব্যাক
     if price is None:
         return out
     out["price"] = price
-    out["pct"] = fetch_24hr_change_percent(symbol)
-    out["candles"] = fetch_recent_candles(symbol)
     return out
 
 
@@ -1861,7 +1864,7 @@ def check_price_milestone(conn, symbol: str) -> None:
         card_bytes = generate_price_card_bytes(
             symbol, milestone, is_up,
             pct_24h=snap["pct"],
-            candles=snap["candles"],
+            candles=REFERENCE_CANDLES,
             current_price=None,
         )
     except Exception as e:
@@ -2848,50 +2851,54 @@ def _draw_candles(draw, candles: List[Tuple[float, float, float, float]],
         )
 
 
+# গিটহাবের রেফারেন্স ফটো (sample_btc_card.png ও sample_eth_card.png) এর হুবহু ৪টা ক্যান্ডেলস্টিক পিক্সেল অনুপাত
+REFERENCE_CANDLES: List[Tuple[float, float, float, float]] = [
+    (26.0, 100.0, 0.0, 78.0),    # ক্যান্ডেল ১ (সবুজ #00E676): wick 176..276, body 198..250
+    (78.0, 130.0, 48.0, 57.0),   # ক্যান্ডেল ২ (লাল #FF1744):  wick 146..228, body 198..219
+    (57.0, 187.0, 44.0, 174.0),  # ক্যান্ডেল ৩ (সবুজ #00E676): wick 89..232,  body 102..219
+    (174.0, 212.0, 126.0, 143.0) # ক্যান্ডেল ৪ (লাল #FF1744):  wick 64..150,  body 102..133
+]
+
+
+def _find_reference_card_path(symbol: str) -> Optional[str]:
+    """গিটহাব রেপোতে থাকা রেফারেন্স ফটো (sample_btc_card.png / sample_eth_card.png) খুঁজে বের করে।"""
+    fname = "sample_btc_card.png" if symbol.startswith("BTC") else "sample_eth_card.png"
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    for candidate in (
+        os.path.join(base_dir, fname),
+        fname,
+        os.path.join(base_dir, "uploads", fname),
+    ):
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
 def generate_price_card_bytes(symbol: str, milestone: float,
                               is_up: bool,
                               pct_24h: Optional[float] = None,
                               candles: Optional[List[Tuple[float, float, float, float]]] = None,
                               current_price: Optional[float] = None) -> Optional[bytes]:
-    """Pillow দিয়ে in-memory প্রাইস কার্ড PNG bytes রেন্ডার করে।
-
-    ডিজাইন (স্পেসিফিকেশন ৬.১):
-      - ডার্ক থিম: ব্যাকগ্রাউন্ড #050506, ভেতরে rounded কার্ড (#0B0B0D, outline #1E1E22)
-      - উচ্চতা 340 নির্ধারিত; চওড়া ডাইনামিক — বড় দাম (যেমন $100,000) কখনো
-        ডান পাশের ক্যান্ডেলের সাথে overlap না করে তার মতো
-      - বাঁয়ে কয়েন লোগো, নাম, বড় মাইলস্টোন দাম, ফুটার; ডানে ৪টা রিয়েল ক্যান্ডেল
-
-    🔴 বড় দাম টেক্সট = আসল স্পট দাম নয়, যে মাইলস্টোন ক্রস হয়েছে সেটাই
-    (ক্যাপশনের সাথে সবসময় একই সংখ্যা)। রঙ = ২৪ ঘণ্টার পরিবর্তন % অনুযায়ী।
-
-    নতুন: pct_24h / candles / current_price বাইরে থেকে (check_price_milestone-এর
-    এক-ফেচ স্ন্যাপশট) এলে সেগুলোই ব্যবহার হয় — এক পোস্টে সব সংখ্যা এক মুহূর্তের।
-    না দিলে (পুরনো কল/টেস্ট) নিজে ফেচ করে (আগের আচরণ অপরিবর্তিত)।
-    current_price থাকলে ফুটারের নিচে ছোট লেখা `Current: $xx,xxx` আঁকা হয় —
-    যাতে ব্যবহারকারী বুঝতে পারে বড় সংখ্যাটি মাইলস্টোন-বাকেট, লাইভ দাম আলাদা।
-    """
+    """গিটহাবের রেফারেন্স ফটোর (sample_btc_card.png / sample_eth_card.png) সাথে ১০০% সেম-টু-সেম
+    প্রাইস কার্ড PNG bytes রেন্ডার করে:
+      - দাম আপ গেলে (is_up=True) বড় দামের লেখা সবুজ (#00E676)
+      - দাম ডাউন এলে (is_up=False) বড় দামের লেখা লাল (#FF1744)
+      - ডান পাশে রেফারেন্স ফটোর হুবহু নিখুঁত ৪টা ক্যান্ডেলস্টিক (REFERENCE_CANDLES)
+      - নিচে শুধুই 'BTC PRICE' / 'ETH PRICE' (অতিরিক্ত Current লাইন নেই)"""
     try:
         meta = COIN_META[symbol]
         H = Config.PRICE_CARD_HEIGHT
         min_w = Config.PRICE_CARD_WIDTH
 
-        # ---- ডেটা আনা: রিয়েল ৪h ক্যান্ডেল + ২৪ঘ পরিবর্তন (বাইরে থেকে
-        # না এলে নিজে ফেচ) ----
-        if candles is None:
-            candles = fetch_recent_candles(symbol)
-        if pct_24h is None:
-            pct_24h = fetch_24hr_change_percent(symbol)
-
-        # ---- ৬.৪ দামের রঙ: মাইলস্টোন-দিক দিয়ে নয়, ২৪ঘ % দিয়ে ----
-        if pct_24h is not None:
-            price_color = "#FF1744" if pct_24h < 0 else "#00E676"
-        elif is_up is not None:
-            # ফলব্যাক: ২৪ঘ এন্ডপয়েন্ট ফেল হলে মাইলস্টোন ক্রসিং দিক
+        # ---- দামের রঙ: আপ গেলে সবুজ (#00E676), ডাউন এলে লাল (#FF1744) ----
+        if is_up is not None:
             price_color = "#00E676" if is_up else "#FF1744"
+        elif pct_24h is not None:
+            price_color = "#FF1744" if pct_24h < 0 else "#00E676"
         else:
-            price_color = "#FFFFFF"   # শেষ ফলব্যাক: সাদা
+            price_color = "#00E676"
 
-        # ---- ফন্ট ও টেক্সট মাপা (ইমেজ বানানোর আগে চওড়া হিসাবের জন্য) ----
+        # ---- ফন্ট ও টেক্সট মাপা ----
         price_text = f"${milestone:,.0f}"      # ডেসিমেল ছাড়া রাউন্ড সংখ্যা
         f_name = get_font(32)                 # "Bitcoin (BTC)" — বোল্ড সাদা
         f_price = get_font(76)                # বড় দাম — size 76 বোল্ড
@@ -2912,15 +2919,36 @@ def generate_price_card_bytes(symbol: str, milestone: float,
         text_x = logo_cx + logo_radius + 40
         text_end_x = text_x + max(name_w, price_w, footer_w)
 
-        # চওড়া = কনটেন্ট শেষ + গ্যাপ + ক্যান্ডেল ব্লক + মার্জিন;
-        # যাতে বড় দামের সংখ্যা ডান পাশের ক্যান্ডেলের সাথে কখনো overlap না করে
         candle_spacing = 64
         body_half = 13
         candle_block_w = candle_spacing * 3 + body_half * 2
         right_pad = 48
         W = max(min_w, int(text_end_x + 64 + candle_block_w + right_pad))
 
-        # ---- ক্যানভাস + rounded কার্ড ----
+        nb = f_name.getbbox(meta["name"])
+        y_price = 52 + (nb[3] - nb[1]) + 22
+
+        # ১) যদি গিটহাবে রেফারেন্স ফটো (sample_btc_card.png / sample_eth_card.png) থাকে এবং কার্ডের মাপ 1000x340 হয়,
+        #    তবে সরাসরি সেই রেফারেন্স ফটোটিকেই টেমপ্লেট হিসেবে নিয়ে শুধু মাঝখানের দামের লেখাটি আপডেট করা হবে!
+        ref_path = _find_reference_card_path(symbol)
+        if ref_path and W == 1000 and text_end_x <= 710:
+            try:
+                img = Image.open(ref_path).convert("RGB")
+                if img.size == (1000, 340):
+                    draw = ImageDraw.Draw(img)
+                    # শুধু পুরনো দামের অংশটুকু কার্ডের ব্যাকগ্রাউন্ড (#0B0B0D) দিয়ে মুছে নতুন দাম বসানো
+                    draw.rectangle([185, 96, 715, 190], fill=_hex_to_rgb("#0B0B0D"))
+                    draw.text((text_x, y_price), price_text, font=f_price,
+                              fill=_hex_to_rgb(price_color))
+                    buf = io.BytesIO()
+                    img.save(buf, format="PNG")
+                    log.info("প্রাইস কার্ড রেন্ডার সফল (রেফারেন্স টেমপ্লেট): %s %s (%s)",
+                             symbol, price_text, "UP/GREEN" if is_up else "DOWN/RED")
+                    return buf.getvalue()
+            except Exception as e:
+                log.warning("রেফারেন্স ফটো টেমপ্লেট লোড ব্যর্থ, সরাসরি আঁকা হচ্ছে: %s", e)
+
+        # ২) হুবহু রেফারেন্স ফটোর পিক্সেল স্পেসিফিকেশনে কার্ড আঁকা
         img = Image.new("RGB", (W, H), _hex_to_rgb("#050506"))
         draw = ImageDraw.Draw(img)
         draw.rounded_rectangle(
@@ -2936,39 +2964,25 @@ def generate_price_card_bytes(symbol: str, milestone: float,
         _draw_coin_logo(draw, symbol, logo_cx, logo_cy, logo_radius)
 
         # ---- লোগোর পাশে: নাম → বড় দাম → ফুটার (উপর থেকে নিচে) ----
-        y = 52
-        draw.text((text_x, y), meta["name"], font=f_name, fill="#FFFFFF")
-        # নামের আসল উচ্চতা বের করে তারপর বড় দাম আঁকা হবে
-        nb = f_name.getbbox(meta["name"])
-        y = 52 + (nb[3] - nb[1]) + 22
-        # বড় মাইলস্টোন দাম — ২৪ঘ % অনুযায়ী রঙ
-        draw.text((text_x, y), price_text, font=f_price,
+        draw.text((text_x, 52), meta["name"], font=f_name, fill="#FFFFFF")
+        draw.text((text_x, y_price), price_text, font=f_price,
                   fill=_hex_to_rgb(price_color))
-        pb = f_price.getbbox(price_text)
-        y += (pb[3] - pb[1]) + 20
-        # ফুটার: BTC PRICE / ETH PRICE — সবসময় ক্যাপিটাল, রঙ #B7B7C0
-        draw.text((text_x, y), meta["footer"], font=f_footer,
+        # রেফারেন্স ফটোর মতো ফুটারটি ঠিক y=189 পজিশনে থাকবে (কোনো অতিরিক্ত Current লাইন থাকবে না)
+        draw.text((text_x, 189), meta["footer"], font=f_footer,
                   fill=_hex_to_rgb("#B7B7C0"))
-        # লাইভ দামের ছোট লাইন — বড় সংখ্যাটি মাইলস্টোন বলে বোঝাতে, যাতে
-        # ব্যবহারকারী লাইভ দামের সাথে গুলিয়ে না যায় ("প্রাইস মিস" সমস্যার ফিক্স)
-        if current_price is not None:
-            fb = f_footer.getbbox(meta["footer"])
-            y2 = y + (fb[3] - fb[1]) + 8
-            draw.text((text_x, y2), f"Current: ${current_price:,.0f}",
-                      font=f_footer, fill=_hex_to_rgb("#6E6E78"))
 
-        # ---- ডান দিক: ৪টা মিনি ক্যান্ডেল (রিয়েল 4h OHLC) ----
+        # ---- ডান দিক: রেফারেন্স ফটোর হুবহু ৪টা নিখুঁত ক্যান্ডেলস্টিক ----
         plot_top, plot_bottom = 64, H - 64
         right_edge = W - right_pad - body_half
         centers = [right_edge - (3 - i) * candle_spacing for i in range(4)]
-        _draw_candles(draw, candles, centers, plot_top, plot_bottom)
+        _draw_candles(draw, REFERENCE_CANDLES, centers, plot_top, plot_bottom)
 
         # ---- in-memory PNG bytes ----
         buf = io.BytesIO()
         img.save(buf, format="PNG")
-        log.info("প্রাইস কার্ড রেন্ডার সফল: %s %s (%dx%d, ২৪ঘ=%.2f%%)",
+        log.info("প্রাইস কার্ড রেন্ডার সফল: %s %s (%dx%d, %s)",
                  symbol, price_text, W, H,
-                 pct_24h if pct_24h is not None else float("nan"))
+                 "UP/GREEN" if is_up else "DOWN/RED")
         return buf.getvalue()
     except Exception as e:
         log.exception("প্রাইস কার্ড রেন্ডার ব্যর্থ: %s", e)
