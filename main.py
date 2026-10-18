@@ -77,8 +77,6 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] [%(threadName)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
-    stream=sys.stdout,
-    force=True,
 )
 log = logging.getLogger("cryptobarta")
 
@@ -134,16 +132,32 @@ class Config:
 
     # ---- ইকোনমিক ইভেন্ট অ্যালার্ট (Forex Factory ক্যালেন্ডার — সম্পূর্ণ ফ্রি) ----
     EVENT_CALENDAR_BASE = "https://www.forexfactory.com/calendar"
-    EVENT_MIN_IMPACT = "high"        # USD High + নির্বাচিত USD Medium + JPY BOJ High
-    EVENT_CURRENCIES = ("USD", "JPY") # ক্রিপ্টো মার্কেটে প্রকৃত প্রভাব ফেলা কারেন্সি
+    EVENT_MIN_IMPACT = "high"        # শুধু high-impact ইভেন্ট (NFP, CPI, FOMC...)
+    EVENT_CURRENCIES = ("USD",)      # কোন মুদ্রার ইভেন্ট ট্র্যাক হবে
     EVENT_ALERT_LEAD_1 = 60          # T−৬০ মিনিট: বিশ্লেষণ-বার্তা + সাথে সাথে পিন
     EVENT_ALERT_LEAD_2 = 30          # T−৩০ মিনিট: একই মেসেজ EDIT + রি-পিন (নতুন মেসেজ নয়)
-    EVENT_IMPACT_DELAY = 0           # T+০ মিনিট (ইভেন্টের সাথে সাথেই ইনস্ট্যান্ট ইমপ্যাক্ট পোস্ট)
-    EVENT_ACTUAL_WAIT_MAX_SECONDS = 30  # ডাটা প্রকাশের পর Actual সংখ্যার জন্য সর্বোচ্চ ৩০ সেকেন্ড (প্রতি ৫ সেকেন্ডে) লাইভ চেক
-    EVENT_LOOP_SLEEP_SECONDS = 15    # ইভেন্ট থ্রেডে প্রতি ১৫ সেকেন্ডে ফাস্ট চেক (ইভেন্টের সময় ১০ সেকেন্ড)
+    EVENT_IMPACT_DELAY = 15          # ইভেন্টের +১৫ মিনিট: ফলাফল+ইমপ্যাক্ট পোস্ট, পরে আনপিন
     EVENT_HORIZON_HOURS = 168        # আগামী ৭ দিনের ইভেন্ট মনে রাখা হয়
     EVENT_CAL_REFRESH_SECONDS = 3600 # ক্যালেন্ডারের নেট ফেচ ঘণ্টায় একবার
     EVENT_BD_UTC_OFFSET = 6          # বাংলাদেশ সময় = UTC+6 (বাংলাদেশে DST নেই)
+
+    # ---- সকালের ডাইজেস্ট (প্রতিদিন BD সকালে আজকের high-impact ইভেন্ট তালিকা) ----
+    MORNING_DIGEST_ENABLED = True
+    MORNING_DIGEST_HOUR_BD = 9       # ৯:০০–১১:৫৯ উইন্ডোতে দিনে একবার (bot_meta-তে
+    #                                  তারিখ সেভ — রিস্টার্টেও ডুপ নয়)। ইভেন্ট
+    #                                  না থাকলেও ছোট মেসেজ যায় = বট-হার্টবিট
+
+    # ---- ফ্ল্যাশ-ক্র্যাশ অ্যালার্ট (২৪ ঘণ্টার % পড়ার সীমা) ----
+    FLASH_DROP_ENABLED = True
+    FLASH_DROP_LIMITS = {"BTCUSDT": -5.0, "ETHUSDT": -7.0}   # এগুলোর বেশি পড়লে
+    # (প্রতি সিম্বল প্রতি BD-দিনে মাত্র একবার — bot_meta-তে কি সেভ)
+
+    # ---- ইউএস মার্কেট ওপেন হিটম্যাপ অ্যালার্ট ----
+    US_MARKET_ALERT_ENABLED = True
+    US_MARKET_DAYS = "weekdays"      # "weekdays" = সোম–শুক্র; শুধু সোম চাইলে "monday"
+    US_MARKET_OPEN_START = (9, 30)   # NY সকাল ৯:৩০ (BD রাত ৭:৩০ গ্রীষ্মে / ৮:৩০ শীতে)
+    US_MARKET_OPEN_END = (10, 30)    # এই উইন্ডোর বাইরে চেক নয়; ছুটির দিনে স্কিপ
+    US_MARKET_PIN_HOURS = 10         # পোস্টের ১০ ঘণ্টা পর পিন অটো-সরবে
 
     # ---- RSS ফিড সোর্স (সবই সম্পূর্ণ ফ্রি, কোনো API key লাগে না) ----
     # প্রথম ৩টা = মূল ফিড; তারপরেরগুলো কভারেজ বাড়াতে যোগ (২০২৬-১০-০১ লাইভ যাচাই করে
@@ -185,12 +199,14 @@ class Config:
     #                       মাল্টি-সোর্স ক্রিপ্টো নিউজ অ্যাগ্রিগেটর)
     TELEGRAM_CHANNELS = [
         "WatcherGuru",
-        "unfolded",
         "cointelegraph",
+        "tier10k",
+        "WuBlockchain",
         "whale_alert_io",
         "CoindeskGlobal",
         "the_block_crypto",
         "decryptnews",
+        "cryptoboten",
     ]
     # প্রতি চ্যানেল থেকে সর্বোচ্চ কয়েকটা সাম্প্রতিক পোস্ট নেওয়া হবে
     TELEGRAM_MAX_POSTS_PER_CHANNEL = 8
@@ -251,12 +267,15 @@ class Config:
 
     # ---- প্রাইস অ্যালার্ট সিস্টেম ----
     ENABLE_PRICE_ALERTS = True
-    BINANCE_TICKER_URL = "https://data-api.binance.vision/api/v3/ticker/price"
-    BINANCE_KLINES_URL = "https://data-api.binance.vision/api/v3/klines"
-    BINANCE_24HR_TICKER_URL = "https://data-api.binance.vision/api/v3/ticker/24hr"
+    BINANCE_TICKER_URL = "https://api.binance.com/api/v3/ticker/price"
+    BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"
+    BINANCE_24HR_TICKER_URL = "https://api.binance.com/api/v3/ticker/24hr"
     # Binance ব্লক/ডাউন হলে স্বয়ংক্রিয় ফলব্যাক
     COINGECKO_PRICE_URL = "https://api.coingecko.com/api/v3/simple/price"
     # প্রতি মাইলস্টোন চেকের মাঝে ৩০–৪৫ সেকেন্ড random gap
+    PRICE_CHECK_MIN_SECONDS = 30
+    PRICE_CHECK_MAX_SECONDS = 45
+    # মাইলস্টোন ধাপ: ETH ৫০ কেন্ড random gap
     PRICE_CHECK_MIN_SECONDS = 30
     PRICE_CHECK_MAX_SECONDS = 45
     # মাইলস্টোন ধাপ: ETH ৫০ ডলার ধাপে, BTC ৫০০ ডলার ধাপে
@@ -369,7 +388,7 @@ def _detect_genai_sdk() -> bool:
 
 
 # =============================================================================
-# ডাটাবেস — SQLite (৪টা টেবিল)
+# ডাটাবেস — SQLite (৭টা টেবিল)
 #   posted_items    : পোস্ট/বাদপড়া সব নিউজের ইতিহাস (ডুপ্লিকেট চেকের জন্য)
 #   bot_meta        : বটের ছোট ছোট মেটাডাটা
 #   price_milestones: প্রতি সিম্বলের সর্বশেষ মাইলস্টোন বেসলাইন (স্টার্টআপ স্প্যাম বন্ধ)
@@ -402,7 +421,7 @@ def get_db():
 
 
 def _init_schema(conn) -> None:
-    """স্পেসিফিকেশনের হুবহু স্কিমা অনুযায়ী ৬টা টেবিল তৈরি (idempotent)।"""
+    """স্পেসিফিকেশনের হুবহু স্কিমা অনুযায়ী ৭টা টেবিল তৈরি (idempotent)।"""
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS posted_items (
@@ -456,6 +475,13 @@ def _init_schema(conn) -> None:
             deleted INTEGER NOT NULL DEFAULT 0,
             attempts INTEGER NOT NULL DEFAULT 0
         );
+
+        CREATE TABLE IF NOT EXISTS market_open_posts (
+            message_id INTEGER PRIMARY KEY,
+            posted_at REAL NOT NULL,
+            day TEXT NOT NULL,
+            pinned INTEGER NOT NULL DEFAULT 0
+        );
         """
     )
     # শিরোনাম-ভিত্তিক ডুপ্লিকেট চেকের জন্য অতিরিক্ত কলাম (পুরনো DB-তেও
@@ -465,15 +491,6 @@ def _init_schema(conn) -> None:
         conn.commit()
     except sqlite3.OperationalError:
         pass
-    # পুরনো math.floor বেসলাইন রিসেট (একবারই চলবে যাতে সঠিক নিকটতম মাইলস্টোন সেট হয়)
-    mig = conn.execute(
-        "SELECT value FROM bot_meta WHERE key = 'milestone_exact_v2'"
-    ).fetchone()
-    if not mig:
-        conn.execute("DELETE FROM price_milestones")
-        conn.execute(
-            "INSERT OR REPLACE INTO bot_meta (key, value) VALUES ('milestone_exact_v2', '1')"
-        )
     conn.commit()
 
 
@@ -593,7 +610,7 @@ def pin_message(message_id: int) -> bool:
     return bool(_telegram_api("pinChatMessage", data={
         "chat_id": TELEGRAM_CHANNEL_ID,
         "message_id": int(message_id),
-        "disable_notification": "false",
+        "disable_notification": "true",
     }))
 
 
@@ -961,25 +978,20 @@ def is_item_fresh(item: NewsItem, now: Optional[datetime] = None) -> bool:
 # Gemini API সম্পূর্ণ ব্যর্থ।
 # =============================================================================
 _HEADLINE_SYSTEM_PROMPT = """তুমি "CRYPTO BARTA" টেলিগ্রাম চ্যানেলের একজন অভিজ্ঞ ক্রিপ্টো নিউজ এডিটর।
-নিচে একটি নতুন খবর এবং সম্প্রতি চ্যানেলে পোস্ট হওয়া খবরের তালিকা দেওয়া আছে।
+নিচে একটি ক্রিপ্টো খবর দেওয়া আছে — সেটি থেকে বাংলা হেডলাইন লিখো।
 
 সোর্স: {source}
-নতুন খবরের শিরোনাম: {title}
-নতুন খবরের বিবরণ: {summary}
-
-সম্প্রতি পোস্ট হওয়া খবরের তালিকা (ডুপ্লিকেট চেকের জন্য):
-{recent_posted_list}
+খবরের শিরোনাম: {title}
+খবরের বিবরণ: {summary}
 
 নিয়ম (অবশ্যই মানতে হবে):
-- is_duplicate: নতুন খবরটি যদি উপরের "সম্প্রতি পোস্ট হওয়া খবরের তালিকা"-র যেকোনো একটি খবরের একই ঘটনা, একই ঘোষণা বা একই বিষয়ের পুনরাবৃত্তি হয় (ভিন্ন ওয়েবসাইট বা ভিন্ন শব্দে লেখা হলেও, যেমন একই কোম্পানির একই পরিমাণ টোকেন বাইব্যাক/ট্রান্সফার/ইটিএফ ফ্লো), তবে অবশ্যই "is_duplicate": true দাও। সম্পূর্ণ নতুন বা ভিন্ন ঘটনা হলে "is_duplicate": false দাও।
-- is_crypto: খবরটি যদি ক্রিপ্টোকারেন্সি (Bitcoin, Ethereum, Altcoins, Token, DeFi, Web3, NFT, Stablecoin, Exchange, Mining, Whale/Wallet ট্রান্সফার, Crypto Hack/Scam, ETF, SEC/CFTC রেগুলেশন) অথবা ক্রিপ্টো বাজারে প্রভাব ফেলে এমন মার্কিন অর্থনীতি/ফেডারেল রিজার্ভ/সুদের হার/মুদ্রাস্ফীতি/শুল্ক/ডলার বা ট্রাম্পের ক্রিপ্টো/অর্থনৈতিক বক্তব্য সম্পর্কিত হয়, তবে "is_crypto": true দাও। কিন্তু ক্রিপ্টো বা অর্থনীতির সাথে সম্পর্কহীন সাধারণ রাজনীতি/নির্বাচন/খেলাধুলা হলে "is_crypto": false দাও।
-- যদি is_duplicate: true অথবা is_crypto: false হয়, তবে headline_bn খালি স্ট্রিং "" রাখো।
-- যদি দুটোই পাশ করে (is_crypto: true এবং is_duplicate: false), তবে headline_bn ঠিক {min_chars}–{max_chars} অক্ষরের হবে (বাংলা) এবং খবরের মূল ঘটনা সংক্ষেপে বলবে (অর্থনৈতিক ইভেন্ট বা সুদের হারের খবর হলে মার্কেটে বুলিশ বা বিয়ারিশ কী প্রভাব পড়তে পারে তাও উল্লেখ করবে)।
+- এই খবরটি ছোট, রুটিন বা মাইনর হলেও অবশ্যই একটি হেডলাইন দাও — কোনো খবর বাদ দেবে না, কোনো খবরকে "গুরুত্বহীন" বলে ফেলবে না।
+- headline_bn ঠিক {min_chars}–{max_chars} অক্ষরের হবে (বাংলা) এবং খবরের "কোর ইনসিডেন্ট" সংক্ষেপে বলবে — কোনো মতামত/বাড়তি ব্যাখ্যা নয়।
 - sentiment: বাজার/খবরের প্রভাব অনুযায়ী শুধু একটি — "BULLISH", "BEARISH" বা "NEUTRAL"।
 - emoji: খবরের বিষয়ের সাথে মানানসই একটি ইমোজি।
 
 শুধু এবং শুধু নিচের JSON ফরম্যাটে উত্তর দাও, কোনো অতিরিক্ত লেখা, মার্কডাউন বা কোড-ফেন্স নয়:
-{{"is_crypto": true, "is_duplicate": false, "sentiment": "BULLISH|BEARISH|NEUTRAL", "headline_bn": "...", "emoji": "..."}}
+{{"sentiment": "BULLISH|BEARISH|NEUTRAL", "headline_bn": "...", "emoji": "..."}}
 """
 
 _REWRITE_INSTRUCTION = """
@@ -1011,11 +1023,12 @@ def _call_gemini(model_name: str, prompt: str) -> str:
 
 
 def _parse_headline_json(raw: str) -> Optional[Dict[str, Any]]:
-    """Gemini-র রেসপন্স থেকে JSON বের করে যাচাই করে দেয়।"""
+    """Gemini-র রেসপন্স থেকে JSON বের করে যাচাই করে দেয়।
+    কোড-ফেন্স (```json ...) থাকলেও চলবে; ভাঙা JSON/সংখ্যা ভুল হলে None।"""
     if not raw:
         return None
     text = raw.strip()
-    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text)
+    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text)   # ফেন্স সরাও
     m = re.search(r"\{.*\}", text, re.S)
     if not m:
         return None
@@ -1026,62 +1039,39 @@ def _parse_headline_json(raw: str) -> Optional[Dict[str, Any]]:
     if not isinstance(data, dict):
         return None
 
-    is_dup_raw = data.get("is_duplicate", False)
-    if is_dup_raw is True or str(is_dup_raw).strip().lower() == "true":
-        return {"is_crypto": True, "is_duplicate": True, "sentiment": "NEUTRAL", "headline_bn": "", "emoji": "⚪"}
-
-    is_crypto_raw = data.get("is_crypto", True)
-    if is_crypto_raw is False or str(is_crypto_raw).strip().lower() == "false":
-        return {"is_crypto": False, "is_duplicate": False, "sentiment": "NEUTRAL", "headline_bn": "", "emoji": "⚪"}
-
     headline = str(data.get("headline_bn", "")).strip()
     if not headline:
         return None
     sentiment = str(data.get("sentiment", "")).strip().upper()
     if sentiment not in SENTIMENT_EMOJI:
-        sentiment = "NEUTRAL"
+        sentiment = "NEUTRAL"          # ভুল/অনুপস্থিত হলে নিরপেক্ষ
     emoji = str(data.get("emoji", "")).strip()
     if not emoji or len(emoji) > 8:
+        # খালি/বিশাল ইমোজি হলে সেন্টিমেন্ট-ডিফল্ট — ভুল/বিড়বিড় ইমোজি
+        # (যেমন পুরো লেখা) ক্যাপশনে যেন না বসে
         emoji = SENTIMENT_EMOJI[sentiment]
     return {
-        "is_crypto": True,
-        "is_duplicate": False,
         "sentiment": sentiment,
         "headline_bn": headline,
         "emoji": emoji,
     }
 
 
-def _get_recent_posted_context(conn, limit: int = 15) -> str:
-    """সম্প্রতি পোস্ট হওয়া সর্বশেষ ১৫টি খবরের ইংরেজি শিরোনাম ও বাংলা হেডলাইন দেয়
-    যাতে Gemini নিজেও ১০০% নির্ভুলভাবে ডুপ্লিকেট খবর চিনতে পারে।"""
-    if conn is None:
-        return "(কোনো পূর্ববর্তী পোস্ট নেই)"
-    try:
-        rows = conn.execute(
-            "SELECT title_orig, headline_bn FROM posted_items "
-            "WHERE posted = 1 ORDER BY id DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-        if not rows:
-            return "(কোনো পূর্ববর্তী পোস্ট নেই)"
-        out = []
-        for idx, (t_orig, h_bn) in enumerate(rows, 1):
-            out.append(f"{idx}. EN: {(t_orig or '')[:140]} | BN: {(h_bn or '')[:140]}")
-        return "\n".join(out)
-    except Exception:
-        return "(কোনো পূর্ববর্তী পোস্ট নেই)"
+def generate_bengali_headline(item: NewsItem) -> Tuple[str, Optional[Dict[str, Any]]]:
+    """প্রতিটি fresh আইটেমের জন্য Gemini কল করে (প্রতি কলের আগে ৩–৫ সেকেন্ড
+    random delay) বাংলা হেডলাইন/সেন্টিমেন্ট/ইমোজি বানায়।
 
-
-def generate_bengali_headline(item: NewsItem, conn=None) -> Tuple[str, Optional[Dict[str, Any]]]:
-    """প্রতিটি fresh আইটেমের জন্য Gemini কল করে বাংলা হেডলাইন/সেন্টিমেন্ট/ইমোজি বানায়
-    এবং একই সাথে AI-ভিত্তিক ডুপ্লিকেট ও নন-ক্রিপ্টো চেক সম্পন্ন করে।"""
-    recent_list = _get_recent_posted_context(conn, limit=15)
+    রিটার্ন: (status, data)
+      - "ok"           → data = {sentiment, headline_bn, emoji}  (পোস্টযোগ্য)
+      - "format_failed"→ API চলেছিল কিন্তু ৩+৩ বার চেষ্টাও length/JSON মিলাতে
+                          পারেনি — আইটেমটি বাদ পড়বে (DB-তে posted=0 হিসেবে সেভ)
+      - "api_failed"   → সব API কল ব্যর্থ (কোটা/নেট) — পরের সাইকেলে আবার চেষ্টা হবে
+                          (DB-তে কিছু সেভ হয় না, ফ্রেশনেস উইন্ডো থাকা অবধি)
+    """
     prompt_base = _HEADLINE_SYSTEM_PROMPT.format(
         source=f"{item.source_name} ({item.source_type})",
         title=item.title[:400],
         summary=(item.summary or item.title)[:1200],
-        recent_posted_list=recent_list,
         min_chars=Config.HEADLINE_MIN_CHARS,
         max_chars=Config.HEADLINE_MAX_CHARS,
     )
@@ -1090,13 +1080,17 @@ def generate_bengali_headline(item: NewsItem, conn=None) -> Tuple[str, Optional[
         max_chars=Config.HEADLINE_MAX_CHARS,
     )
 
+    # প্রাইমারি মডেল, তারপর ফলব্যাক মডেল (কোটা/রেটলিমিট এড়ানোর জন্য)
     models = [Config.GEMINI_TEXT_MODEL]
     if Config.GEMINI_FALLBACK_MODEL and Config.GEMINI_FALLBACK_MODEL != Config.GEMINI_TEXT_MODEL:
         models.append(Config.GEMINI_FALLBACK_MODEL)
 
     saw_api_success = False
     for model_name in models:
+        # সর্বোচ্চ ৩ বার চেষ্টা: ১ম সাধারণ প্রম্পট, পরেরগুলো "Rewrite it strictly
+        # between X and Y characters" নির্দেশনা যোগ করে
         for attempt in range(3):
+            # রেটলিমিট বাঁচাতে প্রতিটি Gemini কলের আগে random delay
             time.sleep(random.uniform(
                 Config.AI_CALL_MIN_DELAY, Config.AI_CALL_MAX_DELAY
             ))
@@ -1104,6 +1098,7 @@ def generate_bengali_headline(item: NewsItem, conn=None) -> Tuple[str, Optional[
             try:
                 raw = _call_gemini(model_name, prompt)
             except Exception as e:
+                # API ব্যর্থ (কোটা/রেটলিমিট/নেট) → পরের মডেল (ফলব্যাক) দেখো
                 log.warning("Gemini API ব্যর্থ (মডেল=%s, চেষ্টা=%d): %s",
                             model_name, attempt + 1, e)
                 break
@@ -1113,17 +1108,16 @@ def generate_bengali_headline(item: NewsItem, conn=None) -> Tuple[str, Optional[
             if parsed is None:
                 log.info("Gemini JSON পারলাম না (মডেল=%s) — আবার চেষ্টা", model_name)
                 continue
-            if parsed.get("is_duplicate", False):
-                return "ai_duplicate", None
-            if not parsed.get("is_crypto", True):
-                return "not_crypto", None
 
             n = len(parsed["headline_bn"])
             if Config.HEADLINE_MIN_CHARS <= n <= Config.HEADLINE_MAX_CHARS:
                 return "ok", parsed
+            # দৈর্ঘ্য সীমার বাইরে → "Rewrite it strictly between X and Y characters"
             log.info("হেডলাইন দৈর্ঘ্য বাইরে: %d অক্ষর (মডেল=%s) — আবার লেখাচ্ছি", n, model_name)
         else:
+            # for-else: ৩টা চেষ্টা API error ছাড়া শেষ হলে — ফলব্যাক মডেল দেখো
             continue
+        # এখানে আসলে break হয়েছে (API ব্যর্থ) → পরের মডেল
 
     if saw_api_success:
         return "format_failed", None
@@ -1131,11 +1125,9 @@ def generate_bengali_headline(item: NewsItem, conn=None) -> Tuple[str, Optional[
 
 
 # =============================================================================
-# ৪.৬ ডুপ্লিকেট চেক — ৪ স্তরের কঠোর সুরক্ষা
-# (১) লিংক-হ্যাশ (link_already_processed)
-# (২) ইংরেজি শিরোনাম + সংখ্যা/এনটিটি ওভারল্যাপ (title_is_duplicate)
-# (৩) বাংলা শব্দ + ক্যারেক্টার এন-গ্রাম সিমিলারিটি (is_similar_to_recent)
-# (৪) Gemini AI সেমান্টিক ডুপ্লিকেট চেক (generate_bengali_headline-এ)
+# ৪.৬ ডুপ্লিকেট চেক — দুই স্তর
+# (১) লিংক-হ্যাশ: আগে প্রসেস হওয়া লিংক (পোস্ট হোক বা বাদ পড়ুক) আর নেওয়া হবে না
+# (২) সেমান্টিক সিমিলারিটি: সর্বশেষ ৫০ পোস্টকরা হেডলাইনের সাথে TF-IDF + cosine
 # =============================================================================
 def link_already_processed(conn, link_hash: str) -> bool:
     """posted_items-এ এই লিংক-হ্যাশ আগে থেকেই আছে কিনা (পোস্ট হোক বা বাদ পড়ুক)।"""
@@ -1147,7 +1139,11 @@ def link_already_processed(conn, link_hash: str) -> bool:
 
 
 def record_item(conn, item: NewsItem, headline: str, posted: int) -> None:
-    """নিউজ আইটেমের ফলাফল DB-তে সেভ।"""
+    """নিউজ আইটেমের ফলাফল DB-তে সেভ — posted=1 পোস্ট হয়েছে,
+    posted=0 ডুপ্লিকেট/ফরম্যাট-ব্যর্থ বলে বাদ পড়েছে। UNIQUE হওয়ায়
+    একই লিংক দুইবার এসেলেও দ্বিতীয়বার ইগনোর হয়।
+    title_orig-এ সোর্সের মূল (ইংরেজি) শিরোনাম সেভ হয় — পরে
+    title_is_duplicate সেটাই দিয়ে ৭০%+ মিল ধরে।"""
     try:
         conn.execute(
             "INSERT OR IGNORE INTO posted_items "
@@ -1161,6 +1157,7 @@ def record_item(conn, item: NewsItem, headline: str, posted: int) -> None:
         log.warning("DB সেভ ব্যর্থ: %s", e)
 
 
+# ---- ডুপ্লিকেটের তিন স্তরের মধ্যে ২ নম্বর: ইংরেজি মূল শিরোনামের ৭০%+ মিল ----
 _TITLE_STOPWORDS = {
     "the", "and", "for", "with", "from", "that", "this", "after", "before",
     "over", "into", "will", "are", "was", "were", "has", "have", "its", "but",
@@ -1170,41 +1167,47 @@ _TITLE_STOPWORDS = {
     "could", "would", "should", "about", "above", "below", "between", "during",
     "under", "again", "there", "here", "each", "other", "while", "both", "few",
     "many", "much", "any", "all", "one", "two", "three", "top", "new", "amid",
-    "per", "vs", "now", "says", "said", "roughly", "nearly", "around", "up",
-    "down", "out", "off", "via", "amidst", "line", "lines", "gets", "get",
+    "per", "vs", "now", "says", "said", "over",
 }
 
 
 def _title_tokens(title: str) -> set:
     """শিরোনাম থেকে তুলনাযোগ্য টোকেন সেট বানায়:
-    - '$15M' বা '15 million' উভয়কেই সংখ্যা '15' হিসেবে রাখে যাতে ভিন্ন আউটলেটের
-      ফরম্যাট সহজেই মেলে।
-    - বহুবচন 's'/'es' ও সাধারণ ক্রিয়া বিভক্তি নরমালাইজ করে।"""
+    - ছোট হরফে রূপান্তর, সংখ্যাকে পুরো একক হিসেবে ("১১৩,০০০" → "113000")
+      রাখা হয় — আলাদা সংখ্যা মানে আলাদা ঘটনা (৬৬,০০০ বনাম ৬৭,০০০)
+    - শেষের বহুবচন 's' কাটা (inflows → inflow) — বিভিন্ন আউটলেটের ফরম্যাট মেলে
+    - সাধারণ ইংরেজি স্টপ-ওয়ার্ড বাদ, ন্যূনতম ৩ অক্ষর (সংখ্যা ≥ ২ অঙ্ক)
+    """
     text = (title or "").lower()
     numbers = {n.replace(",", "").replace(".", "")
-               for n in re.findall(r"\d[\d,\.]*\d|\d+", text)}
+               for n in re.findall(r"\d[\d,\.]*\d|\d", text)}
     words_only = re.sub(r"\d[\d,\.]*", " ", text)
     tokens = set()
     for t in re.findall(r"[a-z]+", words_only):
-        if t in ("million", "millions", "billion", "billions", "usd"):
-            continue
         if len(t) > 3 and t.endswith("s") and not t[-2].isdigit():
             t = t[:-1]
         if t in _TITLE_STOPWORDS or len(t) < 3:
             continue
         tokens.add(t)
-    tokens |= {n for n in numbers if len(n) >= 1 and n not in ("1", "2", "3")}
+    tokens |= {n for n in numbers if len(n) >= 2}
     return tokens
 
 
 def title_is_duplicate(conn, title: str) -> bool:
-    """🔴 ডুপ্লিকেটের ২ নম্বর স্তর (উন্নত ইংরেজি শিরোনাম ও সংখ্যা-এনটিটি মিল):
-    ১) ছোট শিরোনামটির সাপেক্ষে ৫৫% (0.55) বা তার বেশি টোকেন মিললে ডুপ্লিকেট।
-    ২) অথবা দুটি শিরোনামে যদি একই সংখ্যা (যেমন '15' মিলিয়ন) থাকে এবং অন্তত ২টি
-       মূল শব্দ (যেমন 'hyperliquid', 'buyback', 'hype', 'usdc') মেলে → ১০০% একই খবর!
-    ৩) অথবা সংখ্যা না থাকলেও যদি ৪টি বা তার বেশি মূল শব্দ হুবহু মিলে যায় → ডুপ্লিকেট!"""
+    """🔴 ডুপ্লিকেটের ২ নম্বর স্তর (ব্যবহারকারীর কঠোর নির্দেশ):
+    সর্বশেষ SIMILARITY_WINDOW টা পোস্টকরা (posted=1) খবরের মূল ইংরেজি
+    শিরোনামের সাথে এই শিরোনামের টোকেন-মিল **SIMILARITY_THRESHOLD (৭০%) বা
+    বেশি** হলে ডুপ্লিকেট — সেইড সেম খবর অন্য আউটলেট থেকে এসেছে বলে বাদ।
+
+    দুটো সুরক্ষা:
+      - ন্যূনতম ৫টা টোকেন না থাকলে সিদ্ধান্ত নেওয়া হয় না (কম তথ্যে ঝুঁকি নেই)
+      - সংখ্যা-গার্ড: দুই পাশেই সংখ্যা থাকলে একটাও না মিললে সেটা ভিন্ন ঘটনা
+        (যেমন ৬৬,০০০ বনাম ৬৭,০০০) — ডুপ্লিকেট ধরা হবে না
+
+    সব ফলাফল /data/news.db-তে সেভ থাকে — রিস্টার্ট/রিডিপ্লয়েও ইতিহাস মিলিয়ে দেয়।
+    """
     cand = _title_tokens(title)
-    if len(cand) < 3:
+    if len(cand) < 5:
         return False
     rows = conn.execute(
         "SELECT title_orig FROM posted_items WHERE posted = 1 "
@@ -1212,66 +1215,37 @@ def title_is_duplicate(conn, title: str) -> bool:
         "ORDER BY id DESC LIMIT ?",
         (Config.SIMILARITY_WINDOW,),
     ).fetchall()
-    cand_digits = {t for t in cand if t.isdigit()}
-    cand_words = cand - cand_digits
-
+    cand_digits = {t for t in cand if t.isdigit() and len(t) >= 3}
     for (stored_title,) in rows:
         stored = _title_tokens(stored_title)
         if not stored:
             continue
-        stored_digits = {t for t in stored if t.isdigit()}
-        stored_words = stored - stored_digits
-
-        # সংখ্যা-গার্ড: দুই পাশেই সংখ্যা থাকলে এবং একটাও সংখ্যা না মিললে আলাদা ঘটনা (যেমন 65000 বনাম 85000)
+        overlap = len(cand & stored)
+        if overlap < len(cand) * Config.SIMILARITY_THRESHOLD:
+            continue   # ৭০%-এর নিচে মিল → আলাদা খবর
+        # সংখ্যা-গার্ড: শুধু বড় সংখ্যা (≥৩ অঙ্ক — ৬৭০০০/১১৩০০০) তুলনা করা হয়;
+        # "12-month"-মতো ছোট সংখ্যা সাধারণ শব্দ, ওগুলো দিয়ে গার্ড ভাঙবে না।
+        # দুই পাশেই বড় সংখ্যা থাকলে একটাও না মিললে = আলাদা ঘটনা (৬৭k বনাম ১১৩k)
+        stored_digits = {t for t in stored if t.isdigit() and len(t) >= 3}
         if cand_digits and stored_digits and cand_digits.isdisjoint(stored_digits):
             continue
-
-        word_overlap = len(cand_words & stored_words)
-        total_overlap = len(cand & stored)
-        min_len = max(1, min(len(cand), len(stored)))
-
-        # শর্ত ক: একই সংখ্যা + অন্তত ২টি মূল শব্দ মিলে গেছে (যেমন Hyperliquid + $15M + HYPE/buyback)
-        if cand_digits and stored_digits and not cand_digits.isdisjoint(stored_digits) and word_overlap >= 2:
-            return True
-
-        # শর্ত খ: ৪টি বা তার বেশি মূল শব্দ মিলে গেছে
-        if word_overlap >= 4:
-            return True
-
-        # শর্ত গ: ছোট শিরোনামটির অন্তত ৫৫% টোকেন মিলে গেছে
-        if total_overlap / min_len >= 0.55:
-            return True
-
+        return True
     return False
 
 
-_BN_STOPWORDS = {
-    "জন্য", "দিয়ে", "দিয়ে", "করে", "করেছে", "করবে", "করতে", "হয়েছে", "হয়েছে",
-    "হবে", "যা", "এবং", "ও", "বা", "থেকে", "সাথে", "একটি", "এই", "প্রায়",
-    "প্রায়", "মধ্যে", "উপর", "ওপর", "পরে", "আগে", "বলে", "বলেছে", "রয়েছে",
-    "রয়েছে", "পারে", "নিয়ে", "নিয়ে", "বড়", "বড়", "নতুন", "গুরুত্বপূর্ণ",
-}
-
-
-def _bn_meaningful_tokens(text: str) -> set:
-    """বাংলা হেডলাইন থেকে কার-চিহ্ন অক্ষুণ্ণ রেখে অর্থবহ শব্দ ও সংখ্যার সেট বের করে।
-    (scikit-learn এর ডিফল্ট রেজেক্স বাংলা কার-চিহ্নে শব্দ ভেঙে ফেলে বলে এই কাস্টম টোকেনাইজার জরুরি)।"""
-    cleaned = re.sub(r"[।,;:!?()\[\]{}\"'—–\-/\\|+=$%]", " ", text or "")
-    out = set()
-    for w in cleaned.split():
-        w = w.strip()
-        if len(w) < 2 or w in _BN_STOPWORDS:
-            continue
-        out.add(w)
-    return out
-
-
 def is_similar_to_recent(conn, headline: str) -> bool:
-    """🔴 ডুপ্লিকেটের ৩ নম্বর স্তর (বাংলা হেডলাইন শব্দ-ওভারল্যাপ + TF-IDF):
-    সর্বশেষ SIMILARITY_WINDOW (১০০) টা পোস্টকরা বাংলা হেডলাইনের সাথে তুলনা করে:
-      ১) যদি ৪টি বা তার বেশি অর্থবহ বাংলা শব্দ মিলে যায় (যেমন 'হাইপারলিকুইড', '১৫', 'মিলিয়ন', 'টোকেন', 'বাইব্যাকের'), তবে সাথে সাথে ডুপ্লিকেট!
-      ২) অথবা ৪০%+ বাংলা অর্থবহ শব্দ মিলে গেলে ডুপ্লিকেট!
-      ৩) অথবা কাস্টম বাংলা টোকেনাইজারসহ TF-IDF cosine similarity >= 0.55 হলে ডুপ্লিকেট!"""
+    """🔴 ডুপ্লিকেটের ৩ নম্বর স্তর: সর্বশেষ SIMILARITY_WINDOW (১০০) টা
+    পোস্টকরা (posted=1) বাংলা হেডলাইনের সাথে TF-IDF vectorize + cosine
+    similarity; কোনো একটার সাথে মিল SIMILARITY_THRESHOLD (৭০%) বা বেশি
+    হলে ডুপ্লিকেট ধরে বাদ দেয় (DB-তে posted=0 হিসেবে সেভ থাকে)।"""
+    if not _SKLEARN_OK:
+        # sklearn না থাকলে সিমিলারিটি চেক চালু হবে না — লিংক-হ্যাশ ডুপ্লিকেট
+        # চেক তবু কাজ করবে (একবারই লগ হবে)
+        if not getattr(is_similar_to_recent, "_warned", False):
+            log.warning("scikit-learn নেই — সেমান্টিক ডুপ্লিকেট চেক বন্ধ থাকবে")
+            is_similar_to_recent._warned = True
+        return False
+
     rows = conn.execute(
         "SELECT headline_bn FROM posted_items WHERE posted = 1 "
         "ORDER BY id DESC LIMIT ?",
@@ -1280,30 +1254,14 @@ def is_similar_to_recent(conn, headline: str) -> bool:
     if not rows:
         return False
 
-    cand_bn = _bn_meaningful_tokens(headline)
-    past_headlines = [r[0] for r in rows if r[0]]
-
-    for past in past_headlines:
-        past_bn = _bn_meaningful_tokens(past)
-        if not past_bn or not cand_bn:
-            continue
-        common = cand_bn & past_bn
-        if len(common) >= 4:
-            return True
-        if len(common) / max(1, min(len(cand_bn), len(past_bn))) >= 0.40:
-            return True
-
-    if not _SKLEARN_OK:
-        return False
-
-    corpus = past_headlines + [headline]
+    corpus = [r[0] for r in rows if r[0]] + [headline]
     if len(corpus) < 2:
         return False
     try:
-        vectorizer = TfidfVectorizer(token_pattern=r"[^\s।,;:!?()\[\]{}\"'—–\-]+")
-        matrix = vectorizer.fit_transform(corpus)
+        vectorizer = TfidfVectorizer()
+        matrix = vectorizer.fit_transform(corpus)   # শেষটা = নতুন হেডলাইন
         sims = cosine_similarity(matrix[-1:], matrix[:-1]).flatten()
-        return bool(len(sims)) and float(max(sims)) >= 0.55
+        return bool(len(sims)) and float(max(sims)) >= Config.SIMILARITY_THRESHOLD
     except Exception as e:
         log.warning("সিমিলারিটি চেক ব্যর্থ: %s", e)
         return False
@@ -1315,9 +1273,13 @@ def is_similar_to_recent(conn, headline: str) -> bool:
 # POLLINATIONS_WATERMARK_CROP_PX পিক্সেল ক্রপ করে অবশিষ্ট ওয়াটারমার্ক সরানো হয়
 # =============================================================================
 def generate_ai_image_bytes(item: NewsItem, headline: str) -> Optional[bytes]:
-    """Pollinations.ai থেকে AI ছবি নামিয়ে ওয়াটারমার্ক ক্রপ করে PNG bytes দেয়।"""
+    """Pollinations.ai থেকে AI ছবি নামিয়ে ওয়াটারমার্ক ক্রপ করে PNG bytes দেয়।
+    🔴 নতুন: ৫০০/টাইমআউট হলে সর্বোচ্চ ২ বার আবার চেষ্টা (২–৪ সে. গ্যাপ);
+    প্রতিটি রেসপন্স PIL দিয়ে যাচাই (ব্রোকেন/HTML ধরা পড়ে)।
+    সব চেষ্টা ব্যর্থ হলে None — কলার শুধু টেক্সট পাঠাবে, খবর আটকবে না।"""
     if not Config.ENABLE_AI_IMAGE:
         return None
+    # প্রম্পটে মূল খবরের ইংরেজি শিরোনাম ব্যবহার করি (flux মডেল ইংরেজিতে ভালো)
     prompt = (
         "professional cryptocurrency news editorial illustration, "
         "dark modern financial style, dramatic lighting, high detail, "
@@ -1329,23 +1291,25 @@ def generate_ai_image_bytes(item: NewsItem, headline: str) -> Optional[bytes]:
         f"&height={Config.POLLINATIONS_HEIGHT}"
         f"&{Config.POLLINATIONS_EXTRA_PARAMS}"
     )
-    for attempt in range(3):
+    for attempt in range(3):           # ১ বার চেষ্টা + ২ বার রিট্রাই
         if attempt:
-            time.sleep(random.uniform(2, 4))
+            time.sleep(random.uniform(2, 4))   # সার্ভারকে সামান্য সময় দেওয়া
         try:
             resp = requests.get(url, timeout=120, headers=HTTP_HEADERS)
             resp.raise_for_status()
 
             img = Image.open(io.BytesIO(resp.content))
-            img.load()
+            img.load()                 # ভাঙা/ইনভ্যালিড রেসপন্স এখানেই ধরা
             img = img.convert("RGB")
             w, h = img.size
             if w < 64 or h < 64:
                 raise ValueError(f"AI ছবি অতি ছোট ({w}x{h})")
+            # নিচের POLLINATIONS_WATERMARK_CROP_PX পিক্সেল ক্রপের পরেও রেশিও
+            # ঠিক ৪:৩ হয়ে যায় তাই আবার ফিট করা হয় (নিয়ম: সব নিউজ ছবি ৪:৩)
             crop_px = Config.POLLINATIONS_WATERMARK_CROP_PX
             if crop_px > 0 and h > crop_px + 64:
                 img = img.crop((0, 0, w, h - crop_px))
-            img = _fit_image_to_4_3(img)
+            img = _fit_image_to_4_3(img)    # 🔴 ঠিক ৪:৩ (1280×960)
 
             buf = io.BytesIO()
             img.save(buf, format="PNG")
@@ -1357,11 +1321,17 @@ def generate_ai_image_bytes(item: NewsItem, headline: str) -> Optional[bytes]:
 
 
 # =============================================================================
-# ৪.৮ ক্যাপশন ফরম্যাট (HTML parse_mode)
+# ৪.৮ ক্যাপশন ফরম্যাট (HTML parse_mode) — হুবহু স্পেসিফিকেশন অনুযায়ী
+#   {emoji} <b>{headline_bn}</b>
+#   📊 MARKET HINT: {sentiment} {sentiment_emoji}
+#   🌐 Source: Click Here        ← শুধু RSS আইটেমের জন্য
+#   🔔 Follow: CRYPTO UPDATE    ← মাঝে কোলন; শুধু CRYPTO UPDATE ক্লিকেবল
 # =============================================================================
 def build_news_caption(headline: str, sentiment: str, emoji: str,
                        item: NewsItem) -> str:
-    """নিউজ পোস্টের ক্যাপশন HTML স্ট্রিং বানায়।"""
+    """নিউজ পোস্টের ক্যাপশন HTML স্ট্রিং বানায়।
+    হেডলাইন ও URL html.escape করা হয় — Telegram HTML parse ভাঙলে পুরো পোস্ট
+    ব্যর্থ হয়, তাই বিশেষ চিহ্ন (<, >, &, ") আগেই নিরাপদ করা।"""
     safe_headline = html_escape(headline)
     sentiment_emoji = SENTIMENT_EMOJI.get(sentiment, "⚪")
 
@@ -1370,9 +1340,12 @@ def build_news_caption(headline: str, sentiment: str, emoji: str,
         "",
         f"📊 <b>MARKET HINT:</b> <b>{sentiment}</b> {sentiment_emoji}",
     ]
+    # সোর্স লাইন শুধু RSS আইটেমের জন্য — Telegram আইটেমে এই লাইন বাদ
     if item.source_type == "rss":
         lines += ["", f'🌐 <b>Source:</b> <a href="{html_escape(item.link)}">'
                        f'Click Here</a>']
+    # শেষ লাইন: "Follow: CRYPTO UPDATE" — মাঝে কোলন; শুধু CRYPTO UPDATE অংশেই
+    # ক্লিকেবল লিংক (<a> ট্যাগের ভেতরে), "Follow:" সাধারণ লেখা — ওতে চাপ দিলে কিছু হবে না
     lines += ["", f'🔔 <b>Follow: <a href="{html_escape(Config.FOLLOW_CHANNEL_URL)}">'
                    f'CRYPTO UPDATE</a></b>']
     return "\n".join(lines)
@@ -1391,9 +1364,15 @@ def dedupe_urls(urls: List[str]) -> List[str]:
 
 # =============================================================================
 # ৪.৭ ছবি নির্বাচন + পোস্ট — সবসময় সর্বোচ্চ ১টা ছবি, কখনো অ্যালবাম নয়
+#   ১) সোর্সে ছবি থাকলে প্রথমটা (URL থেকে)
+#   ২) না থাকলে/ব্যর্থ হলে AI ছবি (Pollinations + ওয়াটারমার্ক ক্রপ)
+#   ৩) দুটোই ব্যর্থ হলে শুধু টেক্সট
 # =============================================================================
 def _fit_image_to_4_3(img: Image.Image) -> Image.Image:
-    """নিউজ ছবিকে ঠিক ৪:৩ রেশিওতে আনে।"""
+    """নিউজ ছবিকে ঠিক **৪:৩ রেশিওতে** আনে (কভার-স্টাইল মাঝ-ক্রপ + স্কেল)।
+    চওড়া NEWS_IMAGE_WIDTH (1280) পর্যন্ত; ছোট ছবিতে আপস্কেল না করে নিজের
+    চওড়া অনুযায়ী ৪:৩ বানানো হয় (উচ্চতা = চওড়া × ৩/৪, তাই রেশিও কখনোই
+    বিকৃত হয় না)। প্রতিটি নিউজ ছবি (সোর্স বা AI) এই ফাংশন দিয়ে যায়।"""
     img = img.convert("RGB")
     w, _h = img.size
     tw = Config.NEWS_IMAGE_WIDTH if w >= Config.NEWS_IMAGE_WIDTH \
@@ -1403,7 +1382,12 @@ def _fit_image_to_4_3(img: Image.Image) -> Image.Image:
 
 
 def _download_image_bytes(url: str) -> Optional[Tuple[bytes, str, str]]:
-    """সোর্সের ছবি URL ডাউনলোড করে ৪:৩ রেশিওতে ফিট করে দেয়।"""
+    """সোর্সের ছবি URL নিজে ডাউনলোড করে, **৪:৩ রেশিওতে ফিট** করে
+    (JPEG bytes, mime, ফাইলনেম) দেয়। সোর্স ছবি সরাসরি URL দিয়ে পাঠানো হয় না —
+    URL-এ রেশিও নিয়ন্ত্রণ করা যায় না, আর নিয়ম হলো প্রতিটি নিউজ ছবি ৪:৩।
+    ব্যর্থ হলে None (কলার AI ছবি/টেক্সটে যাবে)।
+    যাচাই (নতুন): Content-Type ছবি নয় → বাদ; খুব ছোট ছবি (ফেভিকন/আইকন) → বাদ;
+    ব্রোকেন/ট্রানকেটে ফাইল → PIL ধরে ফেলে। ভুল ছবি চ্যানেলে যাওয়া বন্ধ।"""
     try:
         r = requests.get(url, timeout=20, headers=HTTP_HEADERS)
         r.raise_for_status()
@@ -1412,14 +1396,15 @@ def _download_image_bytes(url: str) -> Optional[Tuple[bytes, str, str]]:
             log.info("Content-Type ছবি নয় (%s) — সোর্স ছবি বাদ: %s", ct, url)
             return None
         img = Image.open(io.BytesIO(r.content))
-        img.load()
+        img.load()                      # ভাঙা/ভুল ফাইল হলে এখানেই এক্সেপশন
         if min(img.size) < 200:
+            # ফেভিকন/ক্ষুদ্র আইকন খবরের ছবি নয় — এগুলো পাঠালে "ভুল ছবি" হয়
             log.info("সোর্স ছবি খুব ছোট (%dx%d) — বাদ: %s",
                      img.size[0], img.size[1], url)
             return None
-        img = _fit_image_to_4_3(img)
+        img = _fit_image_to_4_3(img)    # 🔴 ঠিক ৪:৩
         buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=88)
+        img.save(buf, format="JPEG", quality=88)   # ছোট ফাইল, mime স্পষ্ট
         return buf.getvalue(), "image/jpeg", "source.jpg"
     except Exception as e:
         log.debug("সোর্স ছবি ডাউনলোড ব্যর্থ (%s): %s", url, e)
@@ -1428,9 +1413,15 @@ def _download_image_bytes(url: str) -> Optional[Tuple[bytes, str, str]]:
 
 def post_news_item(item: NewsItem, headline: str, sentiment: str,
                    emoji: str) -> Optional[int]:
-    """ক্যাপশন বানিয়ে ছবি/টেক্সট পাথে চ্যানেলে পোস্ট করে।"""
+    """ক্যাপশন বানিয়ে ছবি/টেক্সট পাথে চ্যানেলে পোস্ট করে — সফল হলে
+    message_id ফেরত (ন্যাচারাল পোস্টের অটো-ডিলিটে লাগে), ব্যর্থ হলে None।
+    ধাপ: ① সোর্সের প্রথম ছবি ডাউনলোড করে ৪:৩ ফিট → ② ফেল হলে AI ছবি (৪:৩)
+    → ③ শুধু টেক্সট। সব ছবিই ঠিক ৪:৩ রেশিওতে যায়।"""
     caption = build_news_caption(headline, sentiment, emoji, item)
 
+    # ১) সোর্সের নিজস্ব ছবি — ডাউনলোড করে ঠিক ৪:৩ রেশিওতে ফিট করে পাঠানো হয়।
+    #    সরাসরি URL পাঠানো হয় না, কারণ URL-এ রেশিও নিয়ন্ত্রণ করা যায় না —
+    #    নিয়ম: প্রতিটি নিউজ ছবি অবশ্যই ৪:৩ (সর্বোচ্চ ১টা ছবি, কখনো অ্যালবাম নয়)।
     source_images = dedupe_urls(item.images)
     if source_images:
         downloaded = _download_image_bytes(source_images[0])
@@ -1443,6 +1434,7 @@ def post_news_item(item: NewsItem, headline: str, sentiment: str,
                 return mid
         log.warning("সোর্স ছবি ডাউনলোড/পাঠানো ব্যর্থ — AI ছবির দিকে যাচ্ছি")
 
+    # ২) AI ছবি
     if Config.ENABLE_AI_IMAGE:
         ai_bytes = generate_ai_image_bytes(item, headline)
         if ai_bytes:
@@ -1452,62 +1444,68 @@ def post_news_item(item: NewsItem, headline: str, sentiment: str,
                 return mid
             log.warning("AI ছবি পাঠানো যায়নি — শুধু টেক্সটে যাচ্ছি")
 
+    # ৩) শুধু টেক্সট (সর্বশেষ fallback)
     return send_text_message(caption, parse_mode="HTML")
 
 
 # =============================================================================
-# একটা আইটেম প্রসেস করার পুরো ধাপ: ৪-স্তরের ডুপ্লিকেট চেক → Gemini → পোস্ট → DB রেকর্ড
+# একটা আইটেম প্রসেস করার পুরো ধাপ: Gemini → ডুপ্লিকেট → পোস্ট → DB রেকর্ড
 # =============================================================================
 def handle_single_item(conn, item: NewsItem) -> None:
     """একটি fresh, নতুন লিংকের আইটেম নিয়ে পুরো সিদ্ধান্ত-প্রক্রিয়া চালায়।"""
-    # স্তর ২: ইংরেজি মূল শিরোনাম ও সংখ্যা-এনটিটি ডুপ্লিকেট চেক (Gemini কলের আগেই)
+    # (০) 🔴 ডুপ্লিকেটের ১ম ফিল্টার (লিংক-হ্যাশ) তো run_cycle-এ হয়ে গেছে;
+    # এখানে ২য় ফিল্টার: ইংরেজি মূল শিরোনামের ৭০%+ মিল — এটা Gemini কলের
+    # আগে চলে তাই খরচ/সময় বাঁচে, এবং অন্য আউটলেট থেকে একই খবর এলে
+    # নিঃশর্তভাবে বাদ পড়ে (posted=0 হিসেবে DB-তে সেভ → আর প্রসেস হবে না)
     if title_is_duplicate(conn, item.title):
         record_item(conn, item, item.title or "(শিরোনাম-ডুপ্লিকেট)", posted=0)
-        log.info("শিরোনাম-ডুপ্লিকেট — বাদ: %s", item.link)
+        log.info("শিরোনাম-ডুপ্লিকেট (৭০%%+ মিল) — বাদ: %s", item.link)
         return
 
-    status, data = generate_bengali_headline(item, conn=conn)
+    status, data = generate_bengali_headline(item)
 
     if status == "api_failed":
+        # Gemini সম্পূর্ণ ব্যর্থ — কিছু রেকর্ড করা হয় না, যাতে পরের সাইকেলে
+        # (ফ্রেশ থাকা অবধি) আবার চেষ্টা হয়
         log.warning("Gemini ব্যর্থ — আইটেম এবার স্কিপ: %s", item.link)
         return
 
-    if status == "ai_duplicate":
-        # স্তর ৪: Gemini AI শনাক্ত করেছে এটি আগের পোস্ট করা খবরের একই ঘটনা
-        record_item(conn, item, item.title or "(AI-ডুপ্লিকেট)", posted=0)
-        log.info("AI সেমান্টিক ডুপ্লিকেট — বাদ [%s]: %s", item.source_name, item.title[:80])
-        return
-
-    if status == "not_crypto":
-        record_item(conn, item, item.title or "(নন-ক্রিপ্টো খবর)", posted=0)
-        log.info("নন-ক্রিপ্টো খবর — বাদ [%s]: %s", item.source_name, item.title[:80])
-        return
-
     if status == "format_failed":
+        # ৩+৩ বার চেষ্টাও হেডলাইন নিয়ম মেনেনি → আইটেটি চূড়ান্তভাবে বাদ;
+        # posted=0 হিসেবে সেভ যাতে আর যেন প্রসেস না হয়
         record_item(conn, item, item.title or "(হেডলাইন তৈরি ব্যর্থ)", posted=0)
         log.warning("হেডলাইন ফরম্যাট ব্যর্থ — বাদ: %s", item.link)
         return
 
     headline = data["headline_bn"]
 
+    # (১ক) "ন্যাচারাল"/নিরপেক্ষ (NEUTRAL) খবর — এখন পোস্ট হয়
+    # (Config.POST_NEUTRAL = True)। ভবিষ্যতে বাদ দিতে হলে সেটি False
+    # করলেই হবে — তখন DB-তে posted=0 সেভ থাকে, আর প্রসেস হবে না।
     if data["sentiment"] == "NEUTRAL" and not Config.POST_NEUTRAL:
         record_item(conn, item, headline, posted=0)
         log.info("নিউট্রাল সেন্টিমেন্ট (ন্যাচারাল) — বাদ: %s", item.link)
         return
 
-    # স্তর ৩: বাংলা অর্থবহ শব্দ ও কাস্টম বাংলা TF-IDF ডুপ্লিকেট চেক
+    # (২) সেমান্টিক ডুপ্লিকেট — মিল গেলে বাদ, কিন্তু posted=0 হিসেবে DB-তে
+    # সেভ থাকে যাতে পরের সাইকেলে আবার প্রসেস না হয়
     if is_similar_to_recent(conn, headline):
         record_item(conn, item, headline, posted=0)
-        log.info("বাংলা সেমান্টিক ডুপ্লিকেট — বাদ: %s", item.link)
+        log.info("সেমান্টিক ডুপ্লিকেট — বাদ: %s", item.link)
         return
 
+    # পোস্ট (ছবি নির্বাচন ও fallback সহ) — সফল হলে message_id ফেরত
     mid = post_news_item(item, headline, data["sentiment"], data["emoji"])
     if mid:
         record_item(conn, item, headline, posted=1)
+        # ন্যাচারাল (NEUTRAL) পোস্ট হলে বট নিজে ট্র্যাক করে রাখে —
+        # ১ ঘণ্টা পর সেটি অটো-ডিলিট হবে (delete_expired_natural_posts)
         if data["sentiment"] == "NEUTRAL":
             track_natural_post(conn, mid, link=item.link)
         log.info("✅ পোস্ট সফল [%s]: %s", item.source_name, headline[:80])
     else:
+        # পোস্ট ব্যর্থ (Telegram সমস্যা) — রেকর্ড করা হয় না, পরের সাইকেলে
+        # আবার চেষ্টা হবে (ফ্রেশ থাকা পর্যন্ত)
         log.warning("পোস্ট ব্যর্থ — পরে আবার চেষ্টা হবে: %s", item.link)
 
 
@@ -1704,22 +1702,19 @@ def fetch_24hr_change_percent(symbol: str) -> Optional[float]:
         return None
 
 
-# গিটহাবের রেফারেন্স ফটো (sample_btc_card.png ও sample_eth_card.png) এর হুবহু ৪টা ক্যান্ডেলস্টিক পিক্সেল অনুপাত
-REFERENCE_CANDLES: List[Tuple[float, float, float, float]] = [
-    (26.0, 100.0, 0.0, 78.0),    # ক্যান্ডেল ১ (সবুজ #00E676): wick 176..276, body 198..250
-    (78.0, 130.0, 48.0, 57.0),   # ক্যান্ডেল ২ (লাল #FF1744):  wick 146..228, body 198..219
-    (57.0, 187.0, 44.0, 174.0),  # ক্যান্ডেল ৩ (সবুজ #00E676): wick 89..232,  body 102..219
-    (174.0, 212.0, 126.0, 143.0) # ক্যান্ডেল ৪ (লাল #FF1744):  wick 64..150,  body 102..133
-]
-
-
 def get_market_snapshot(symbol: str) -> Dict[str, Any]:
-    """এক সিম্বলের স্পট দাম ও রেফারেন্স ক্যান্ডেল রিটার্ন করে।"""
-    out: Dict[str, Any] = {"price": None, "pct": None, "candles": list(REFERENCE_CANDLES)}
+    """এক সিম্বলের **দাম + ২৪ঘ% + ৪টা ৪h ক্যান্ডেল এক জায়গা থেকে** আনে।
+    🔴 এক পোস্টের সব সংখ্যা (ক্যাপশন-মাইলস্টোন, কার্ডের রঙ, ক্যান্ডেল) এক
+    স্ন্যাপশট থেকেই যায় — আলাদা আলাদা কলে আলাদা মুহূর্তের/মিশ্র সোর্সের দাম
+    বসার সম্ভাবনা বন্ধ (প্রাইস "মিস" সমস্যার ফিক্স)।
+    দাম না পেলে বাকি ফিল্ড খালি থাকবে (কলার সেভাবেই সামলাবে)।"""
+    out: Dict[str, Any] = {"price": None, "pct": None, "candles": []}
     price = fetch_spot_price(symbol)          # Binance → CoinGecko ফলব্যাক
     if price is None:
         return out
     out["price"] = price
+    out["pct"] = fetch_24hr_change_percent(symbol)
+    out["candles"] = fetch_recent_candles(symbol)
     return out
 
 
@@ -1794,78 +1789,124 @@ def build_milestone_caption(symbol: str, milestone: float, is_up: bool) -> str:
             f"[{coin_tag}]({Config.MILESTONE_ALERT_LINK_URL})")
 
 
+def _flash_day_bd() -> str:
+    """ফ্ল্যাশ-অ্যালার্টের "আজ" — BD তারিখ (প্রতি সিম্বল প্রতি দিন একবারের
+    কুলডাউন; তারিখ বদলালেই আবার একবার যেতে পারবে)।"""
+    return datetime.now(
+        timezone(timedelta(hours=Config.EVENT_BD_UTC_OFFSET))
+    ).date().isoformat()
+
+
+def check_flash_drop(conn, symbol: str, snap: dict) -> None:
+    """ফ্ল্যাশ-ক্র্যাশ অ্যালার্ট: ২৪ ঘণ্টার % পরিবর্তন সীমার নিচে গেলে
+    (যেমন BTC −৫%) একটি লেগেসি-Markdown টেক্সট যায় — প্রতি সিম্বল প্রতি
+    BD-দিনে মাত্র একবার (bot_meta-তে `flash_drop_{symbol}` কি)।
+    দাম/২৪ঘ% না পেলে বা সীমা না ছুঁলে কিছুই করে না; মাইলস্টোন-লজিকের ভেতরে
+    নয় — মাইলস্টোন হলেও এটি আলাদা কুলডাউনে ফায়ার হবে।"""
+    if not Config.FLASH_DROP_ENABLED:
+        return
+    limit = Config.FLASH_DROP_LIMITS.get(symbol)
+    pct = snap.get("pct")
+    if limit is None or pct is None:
+        return
+    try:
+        pct = float(pct)
+    except (TypeError, ValueError):
+        return
+    if pct > limit:
+        return                                   # সীমার উপরে = সাধারণ দিন
+    key = f"flash_drop_{symbol}"
+    today = _flash_day_bd()
+    row = conn.execute(
+        "SELECT value FROM bot_meta WHERE key = ?", (key,)
+    ).fetchone()
+    if row and row[0] == today:
+        return                                   # আজ ইতিমধ্যে গেছে
+    price = snap.get("price")
+    price_txt = f"${price:,.0f}" if price is not None else "—"
+    name = "BTC" if "BTC" in symbol else ("ETH" if "ETH" in symbol else symbol)
+    # প্রাইস-ডোমেইনের মেসেজ = লেগেসি Markdown (নিউজই HTML) — স্ট্যান্ডিং রুল
+    text = (
+        f"📉 *ফ্ল্যাশ-ক্র্যাশ অ্যালার্ট: {name}*\n\n"
+        f"২৪ ঘণ্টায় *{pct:.2f}%* পড়েছে\n"
+        f"বর্তমান দাম: *{price_txt}*\n\n"
+        "⚠️ তীব্র বিক্রি চলছে — ভলিউম ও সাপোর্ট লেভেল পর্যবেক্ষণে রাখুন।\n"
+        f"🔔 Follow: [CRYPTO UPDATE]({Config.FOLLOW_CHANNEL_URL})"
+    )
+    if not send_text_message(text, parse_mode="Markdown"):
+        log.warning("ফ্ল্যাশ-অ্যালার্ট যায়নি — পরের সাইকেলে আবার [%s]", symbol)
+        return
+    conn.execute(
+        "INSERT OR REPLACE INTO bot_meta (key, value) VALUES (?, ?)",
+        (key, today),
+    )
+    conn.commit()
+    log.info("📉 ফ্ল্যাশ-ক্র্যাশ অ্যালার্ট পাঠানো: %s %.2f%%", symbol, pct)
+
+
 def check_price_milestone(conn, symbol: str) -> None:
-    """একটি সিম্বলের বর্তমান দাম নিয়ে নিখুঁত মাইলস্টোন ক্রসিং লজিক চালায়:
-      - BTC step = $500, ETH step = $50
-      - আগে math.floor ব্যবহারের কারণে দাম $2,700 থেকে $2,699-এ নামলেই $2,650
-        অ্যালার্ট চলে যেত। এখন সেটি সম্পূর্ণ ফিক্স করা হয়েছে:
-      - দাম যখন উপরে উঠবে: যতক্ষণ না আসল দাম পরবর্তী মাইলস্টোন (last_milestone + step)
-        স্পর্শ বা অতিক্রম করছে, ততক্ষণ কোনো অ্যালার্ট যাবে না।
-      - দাম যখন নিচে নামবে: যতক্ষণ না আসল দাম নিচের মাইলস্টোন (last_milestone - step,
-        যেমন $2,700 থেকে একদম $2,650 বা তার নিচে) স্পর্শ করছে, ততক্ষণ কোনো অ্যালার্ট যাবে না!
+    """একটি সিম্বলের বর্তমান দাম নিয়ে মাইলস্টোন লজিক চালায় (খুবই গুরুত্বপূর্ণ):
+
+    milestone = floor(price / step) * step   (BTC step=500, ETH step=50)
+
+    - কোনো রেকর্ড না থাকলে (প্রথমবার ট্র্যাক): শুধু বেসলাইন সেভ, কোনো অ্যালার্ট নয়
+      → বট স্টার্ট হওয়ামাত্র অতীতের মাইলস্টোনে ভুয়া অ্যালার্ট যাওয়া বন্ধ
+    - milestone == last_milestone: একই বাকেটে ঘোরাঘুরি — কিছুই নয়
+    - বদলালে: সবসময় আগে DB আপডেট, তারপর ২৪ ঘণ্টা কুলডাউন চেক,
+      কুলডাউনে না থাকলে অ্যালার্ট পাঠিয়ে কুলডাউন টাইমস্ট্যাম্প সেভ
     """
-    snap = get_market_snapshot(symbol)
+    snap = get_market_snapshot(symbol)   # এক-ফেচ স্ন্যাপশট: দাম + ২৪ঘ% + ক্যান্ডেল
     price = snap["price"]
     if price is None:
-        return
+        return   # দাম পাওয়া যায়নি — এই চেক স্কিপ (ক্র্যাশ নয়)
+
+    # ফ্ল্যাশ-ক্র্যাশ চেক: মাইলস্টোন-লজিকের আগে, নিজস্ব কুলডাউনে — তাই
+    # try/except দিয়ে আলাদা করা, যাতে ফ্ল্যাশের কোনো সমস্যায় মাইলস্টোন না আটকে
+    try:
+        check_flash_drop(conn, symbol, snap)
+    except Exception as e:
+        log.warning("ফ্ল্যাশ-ড্রপ চেক ব্যর্থ [%s]: %s", symbol, e)
 
     step = SYMBOL_STEPS[symbol]
-    nearest_milestone = round(price / step) * step
+    milestone = math.floor(price / step) * step   # নিচের দিকে রাউন্ডড বাকেট
 
     row = conn.execute(
-        "SELECT last_milestone, last_price FROM price_milestones WHERE symbol = ?",
+        "SELECT last_milestone FROM price_milestones WHERE symbol = ?",
         (symbol,),
     ).fetchone()
 
-    # প্রথমবার ট্র্যাক: বর্তমান দামের সবচেয়ে কাছের মাইলস্টোন বেসলাইন হিসেবে সেভ
+    # --- স্টার্টআপ স্প্যাম বন্ধ: প্রথমবার দেখলে শুধু বেসলাইন ---
     if row is None:
-        _save_milestone_baseline(conn, symbol, nearest_milestone, price)
-        log.info("মাইলস্টোন বেসলাইন সেভ [%s]: %s (বর্তমান দাম $%.2f)",
-                 symbol, f"${nearest_milestone:,.0f}", price)
+        _save_milestone_baseline(conn, symbol, milestone, price)
+        log.info("মাইলস্টোন বেসলাইন সেভ [%s]: %s (কোনো অ্যালার্ট নয়)",
+                 symbol, f"${milestone:,.0f}")
         return
 
     last_milestone = float(row[0])
+    if milestone == last_milestone:
+        return   # একই বাকেট — কিছুই করার নেই
 
-    milestone = None
-    is_up = None
+    # --- মাইলস্টোন বদলেছে: দিক বের করো, আর নতুন ভ্যালু সবসময় আগেই আপডেট ---
+    is_up = milestone > last_milestone
+    _save_milestone_baseline(conn, symbol, milestone, price)   # কুলডাউনে থাকলেও
 
-    # ১) দাম উপরে উঠেছে এবং সত্যিকার অর্থেই পরবর্তী মাইলস্টোন (last_milestone + step) ছুঁয়েছে
-    if price >= last_milestone + step:
-        milestone = math.floor(price / step) * step
-        is_up = True
-    # ২) দাম নিচে নেমেছে এবং সত্যিকার অর্থেই নিচের মাইলস্টোন (last_milestone - step) ছুঁয়েছে
-    #    (যেমন 2700 থেকে একদম 2650 বা তার নিচে নামলে তবেই 2650 ট্রিগার হবে; 2699 বা 2660-এ নয়!)
-    elif price <= last_milestone - step:
-        milestone = math.ceil(price / step) * step
-        if milestone > last_milestone - step:
-            milestone = last_milestone - step
-        is_up = False
-    else:
-        # এখনো পরবর্তী মাইলস্টোনে পৌঁছায়নি — শুধু last_price আপডেট
-        conn.execute(
-            "UPDATE price_milestones SET last_price = ?, updated_at = ? WHERE symbol = ?",
-            (price, _now_iso(), symbol),
-        )
-        conn.commit()
-        return
-
-    # নতুন মাইলস্টোন বেসলাইন সেভ
-    _save_milestone_baseline(conn, symbol, milestone, price)
-
-    # ২৪ ঘণ্টা কুলডাউন চেক
+    # --- ২৪ ঘণ্টা কুলডাউন (DB-তে persist) ---
     if _milestone_in_cooldown(conn, symbol, milestone):
         log.info("কুলডাউনে — অ্যালার্ট স্কিপ [%s %s]", symbol, f"${milestone:,.0f}")
         return
 
+    # --- অ্যালার্ট পাঠাও ---
     caption = build_milestone_caption(symbol, milestone, is_up)
 
+    # কার্ড (Pillow PNG) — ব্যর্থ হলে শুধু টেক্সট fallback;
+    # দুই ক্ষেত্রেই একই ক্যাপশন + parse_mode="Markdown"
     card_bytes = None
     try:
         card_bytes = generate_price_card_bytes(
             symbol, milestone, is_up,
-            pct_24h=snap["pct"],
-            candles=REFERENCE_CANDLES,
-            current_price=None,
+            pct_24h=snap["pct"],          # একই স্ন্যাপশটের ২৪ঘ% (রঙ)
+            candles=snap["candles"],      # একই স্ন্যাপশটের ক্যান্ডেল
+            current_price=price,          # ফুটারে লাইভ দাম (মাইলস্টোন vs লাইভ বোঝাতে)
         )
     except Exception as e:
         log.warning("প্রাইস কার্ড রেন্ডার এক্সেপশন: %s", e)
@@ -1881,7 +1922,7 @@ def check_price_milestone(conn, symbol: str) -> None:
 
     if sent:
         record_milestone_alert(conn, symbol, milestone)
-        log.info("🚨 প্রাইস অ্যালার্ট পাঠানো হয়েছে: %s (আসল দাম: $%.2f)", caption, price)
+        log.info("🚨 প্রাইস অ্যালার্ট পাঠানো হয়েছে: %s", caption)
     else:
         log.warning("অ্যালার্ট পাঠানো যায়নি (কুলডাউন সেভ হয়নি — পরে আবার চেষ্টা)")
 
@@ -1960,108 +2001,10 @@ def _bd_time_str(epoch: float) -> str:
             f"{part} {_bn_num(h12)}:{minute2}")
 
 
-_JPY_CRYPTO_HIGH_KEYWORDS = (
-    "boj", "ueda", "policy rate", "monetary policy", "interest rate",
-)
-
-
-def _is_crypto_moving_event(ev: dict) -> bool:
-    """ফরেক্স ফ্যাক্টরির ইভেন্টটি আসলেই ক্রিপ্টো মার্কেটে (BTC/ETH) বড় মুভমেন্ট
-    ফেলতে পারে কিনা তা যাচাই করে:
-      ১) USD-এর শুধুমাত্র High-Impact মেজর ইভেন্ট (CPI, NFP, FOMC, Powell, GDP, PPI, Retail Sales, PCE)
-      ২) JPY-এর High-Impact ব্যাংক অব জাপান (BOJ Policy Rate / Gov Ueda) ইভেন্ট
-    (ছোটখাটো Medium-Impact ইভেন্ট যেমন ISM PMI যেগুলো মার্কেটে বড় প্রভাব ফেলে না সেগুলো বাদ)।"""
-    impact = str(ev.get("impactName", "")).lower()
-    currency = str(ev.get("currency") or "").upper()
-    name_low = str(ev.get("name") or "").strip().lower()
-    if not name_low or impact != "high":
-        return False
-    if currency == "USD":
-        return True
-    if currency == "JPY" and any(k in name_low for k in _JPY_CRYPTO_HIGH_KEYWORDS):
-        return True
-    return False
-
-
-def _is_major_lasting_event(ev: dict) -> bool:
-    """ইভেন্টটি কি এমন মেজর ম্যাক্রো ইভেন্ট যা মার্কেটকে পরবর্তী কিছু সময় বা কয়েক দিন
-    ধরে রাখতে পারে? (যেমন CPI, NFP, FOMC Rate/Statement/Minutes, Powell, Core PCE, BOJ Rate)।"""
-    name_low = str(ev.get("name") or "").lower()
-    major_keys = (
-        "cpi", "non-farm", "federal funds rate", "fomc", "powell",
-        "core pce", "policy rate", "interest rate", "gdp",
-    )
-    return any(k in name_low for k in major_keys)
-
-
-def _estimate_crypto_impact(ev: dict) -> Tuple[str, str]:
-    """ইভেন্টের ধরন অনুযায়ী ক্রিপ্টো মার্কেটে সম্ভাব্য ইমপ্যাক্ট লেভেল এবং
-    কত শতাংশ (X%–Y%) আপ/ডাউন বা বুলিশ/বিয়ারিশ মুভমেন্ট হতে পারে তা ফেরত দেয়।"""
-    name_low = str(ev.get("name") or "").lower()
-    extreme_keys = (
-        "cpi", "non-farm", "federal funds rate", "fomc statement",
-        "fomc press conference", "core pce", "interest rate",
-    )
-    if any(k in name_low for k in extreme_keys):
-        return "🔥 অতি উচ্চ (Extreme High)", "±২.৫% থেকে ৫.০%+ (আপ/ডাউন)"
-    return "⚡ উচ্চ (High Impact)", "±১.৫% থেকে ৩.০% (আপ/ডাউন)"
-
-
-def _parse_num_val(s: str) -> Optional[float]:
-    """'89K', '4.1%', '-41.7B' ইত্যাদি স্ট্রিং থেকে সংখ্যা বের করে।"""
-    if not s:
-        return None
-    m = re.search(r"[-+]?\d+(?:\.\d+)?", str(s).replace(",", ""))
-    return float(m.group(0)) if m else None
-
-
-def _detect_pre_event_bias(ev: dict) -> Tuple[str, str]:
-    """শুধুমাত্র যখন কোনো মেজর Tier-1 ডাটা ইভেন্টে (CPI, Core CPI, NFP, FOMC Rate, Core PCE)
-    পূর্বাভাস (Forecast) এবং পূর্বের ডাটার (Previous) মধ্যে সত্যিকারের বড় ব্যবধান থাকে — যার কারণে
-    ইভেন্ট শুরু হওয়ার সাথে সাথেই মার্কেট অটোমেটিক বুলিশ বা বিয়ারিশ হবে — কেবল তখনই
-    AUTO_BULLISH বা AUTO_BEARISH রিটার্ন করে।
-    অন্যথায় ('NONE', '') রিটার্ন করে যাতে অযথা অটো-বুলিশ লেখা না থাকে!"""
-    name_low = str(ev.get("name") or "").lower()
-    # ভাষণ বা মিটিং মিনিটসে কখনোই আগে থেকে অটো-বুলিশ লেখা থাকবে না
-    if any(k in name_low for k in ("speaks", "minutes", "press conference", "statement")):
-        return "NONE", ""
-
-    # শুধুমাত্র সত্যিকারের বড় মার্কেট-মুভার ডাটা ইভেন্টে অটো-বুলিশ/অটো-বিয়ারিশ চেক হবে
-    tier1_auto_keys = ("cpi", "non-farm", "federal funds rate", "core pce", "policy rate", "interest rate")
-    if not any(k in name_low for k in tier1_auto_keys):
-        return "NONE", ""
-
-    f_val = _parse_num_val(ev.get("forecast", ""))
-    p_val = _parse_num_val(ev.get("previous", ""))
-    if f_val is None or p_val is None:
-        return "NONE", ""
-
-    diff = f_val - p_val
-    # ব্যবধান যথেষ্ট বড় কিনা যাচাই:
-    # - NFP ('non-farm'): অন্তত ২৫% বা ৪০K+ ব্যবধান হতে হবে
-    # - CPI / PCE / Rate: অন্তত ০.২% বা তার বেশি ব্যবধান হতে হবে
-    if "non-farm" in name_low:
-        if abs(diff) < max(35.0, abs(p_val) * 0.25):
-            return "NONE", ""
-    else:
-        if abs(diff) < 0.2:
-            return "NONE", ""
-
-    if diff < 0:
-        return (
-            "AUTO_BULLISH",
-            "🚀 ইভেন্ট শুরু হওয়া মাত্র অটোমেটিক বুলিশ পাম্পের সম্ভাবনা (AUTO-BULLISH 🟢)",
-        )
-    else:
-        return (
-            "AUTO_BEARISH",
-            "📉 ইভেন্ট শুরু হওয়া মাত্র অটোমেটিক বিয়ারিশ চাপের সম্ভাবনা (AUTO-BEARISH 🔴)",
-        )
-
-
 def _ff_parse_events(html: str) -> List[dict]:
-    """Forex Factory পেজের JS-এ থাকা `days: [...]` JSON থেকে শুধুমাত্র
-    ক্রিপ্টো মার্কেটে সত্যিকারের ইমপ্যাক্ট ফেলে এমন High-Impact ইভেন্ট বের করে।"""
+    """Forex Factory পেজের JS-এ থাকা `days: [...]` JSON থেকে শুধু
+    high-impact + কনফিগার করা মুদ্রার (ডিফল্ট USD) ইভেন্ট বের করে।
+    প্রতিটি ইভেন্টের dateline = unix epoch (UTC) — টাইমজোন-হিসাব স্বয়ংক্রিয় সঠিক।"""
     events: List[dict] = []
     m = re.search(r"days:\s*(\[[\s\S]*?\])\s*,\s*time:", html or "")
     if not m:
@@ -2073,8 +2016,10 @@ def _ff_parse_events(html: str) -> List[dict]:
         return events
     for day in days:
         for ev in (day.get("events") or []):
-            if not _is_crypto_moving_event(ev):
-                continue
+            if str(ev.get("impactName", "")).lower() != Config.EVENT_MIN_IMPACT:
+                continue                      # medium/low/holiday — বাদ
+            if ev.get("currency") not in Config.EVENT_CURRENCIES:
+                continue                      # অন্য মুদ্রা — বাদ
             if not ev.get("dateline") or not str(ev.get("name") or "").strip():
                 continue
             events.append({
@@ -2089,38 +2034,10 @@ def _ff_parse_events(html: str) -> List[dict]:
     return events
 
 
-def _group_same_time_events(raw_events: List[dict]) -> List[dict]:
-    """একই সময়ে (dateline) ও একই কারেন্সিতে একাধিক সাব-ইভেন্ট থাকলে সেগুলোকে একটি
-    সমন্বিত ইভেন্টে একত্রিত করে।"""
-    grouped: Dict[Tuple[str, int], List[dict]] = {}
-    for ev in raw_events:
-        k = (ev["currency"], int(ev["dateline"]))
-        grouped.setdefault(k, []).append(ev)
-
-    out: List[dict] = []
-    for (curr, dl), ev_list in grouped.items():
-        if len(ev_list) == 1:
-            e0 = dict(ev_list[0])
-            e0["sub_events"] = [dict(ev_list[0])]
-            out.append(e0)
-            continue
-        primary = dict(ev_list[0])
-        names = [e["name"] for e in ev_list]
-        primary["name"] = " / ".join(names[:3]) + (f" (+{len(names)-3})" if len(names) > 3 else "")
-        f_parts = [f"{e['name']}: {e['forecast']}" for e in ev_list if e.get("forecast")]
-        p_parts = [f"{e['name']}: {e['previous']}" for e in ev_list if e.get("previous")]
-        a_parts = [f"{e['name']}: {e['actual']}" for e in ev_list if e.get("actual")]
-        primary["forecast"] = " | ".join(f_parts) if len(f_parts) > 1 else (ev_list[0].get("forecast") or "")
-        primary["previous"] = " | ".join(p_parts) if len(p_parts) > 1 else (ev_list[0].get("previous") or "")
-        primary["actual"] = " | ".join(a_parts)
-        primary["sub_events"] = [dict(x) for x in ev_list]
-        out.append(primary)
-    out.sort(key=lambda e: e["dateline"])
-    return out
-
-
 def fetch_economic_events(force: bool = False) -> List[dict]:
-    """আগামী ৭ দিনের মেজর ক্রিপ্টো-মুভিং ইভেন্ট আনে (ঘণ্টায় একবার নেট ফেচ)।"""
+    """আগামী ৭ দিনের high-impact ইভেন্ট আনে (ঘণ্টায় একবার নেট ফেচ)।
+    দুটো পেজ: ① বর্তমান সপ্তাহ ② কাল থেকে শুরু হওয়া সপ্তাহ (week=oct4.2026
+    ফরম্যাট) — দুটো মিলে আগামী ৭ দিন পুরোপুরি ঢেকে দেয়।"""
     now = time.time()
     cache = _EVENT_CAL_CACHE
     if (not force and cache["fetched_at"] and cache["events"]
@@ -2128,12 +2045,10 @@ def fetch_economic_events(force: bool = False) -> List[dict]:
         return list(cache["events"])
 
     urls = [Config.EVENT_CALENDAR_BASE]
-    for delta_days in (1, 7):
-        nxt = datetime.now(timezone.utc) + timedelta(days=delta_days)
-        u = (f"{Config.EVENT_CALENDAR_BASE}?week="
-             f"{nxt.strftime('%b').lower()}{nxt.day}.{nxt.year}")
-        if u not in urls:
-            urls.append(u)
+    # FF-এর পরের-সপ্তাহ প্যারামিটার: 'oct4.2026' (মাসের ইংরেজি অক্ষর ৩টা + তারিখ)
+    nxt = datetime.now(timezone.utc) + timedelta(days=1)
+    urls.append(f"{Config.EVENT_CALENDAR_BASE}?week="
+                f"{nxt.strftime('%b').lower()}{nxt.day}.{nxt.year}")
 
     merged: Dict[Any, dict] = {}
     for url in urls:
@@ -2146,261 +2061,79 @@ def fetch_economic_events(force: bool = False) -> List[dict]:
             log.warning("ইভেন্ট ক্যালেন্ডার ফেচ ব্যর্থ (%s): %s", url, e)
 
     horizon = now + Config.EVENT_HORIZON_HOURS * 3600
-    raw_valid = [e for e in merged.values()
-                 if now - 900 <= e["dateline"] <= horizon]
-    events = _group_same_time_events(raw_valid)
+    # ১৫ মিনিটের আগে শুরু হওয়া ইভেন্ট আর নেওয়া হয় না (শুরুর আগে বট বন্ধ ছিল);
+    # তবে ১৫ মিনিটের মধ্যে শুরু হওয়াটা নেওয়া হয় — স্টেজ-লজিক সেটা সামলাবে।
+    events = [e for e in merged.values()
+              if now - Config.EVENT_IMPACT_DELAY * 60 <= e["dateline"] <= horizon]
+    events.sort(key=lambda e: e["dateline"])
     if events or merged:
-        cache["fetched_at"] = now
+        cache["fetched_at"] = now          # ব্যর্থ হলে পুরনো ক্যাশেই থাকে
         cache["events"] = events
     return list(events)
 
 
-def _event_matching_keywords(ev: dict) -> List[str]:
-    """ওই নির্দিষ্ট ইভেন্টের সাথে সম্পর্কিত কী-ওয়ার্ড তৈরি করে যাতে স্ট্রাইপ বা অন্য কোনো
-    অপ্রাসঙ্গিক ক্রিপ্টো খবর ইভেন্ট রিপোর্টের ভেতরে কখনোই ঢুকে না পড়ে!"""
-    name_low = str(ev.get("name") or "").lower()
-    kws = set()
-    for w in re.findall(r"[a-z]{3,}", name_low):
-        if w not in ("the", "and", "for", "speaks", "change", "index", "final", "prelim", "core"):
-            kws.add(w)
-    if "cpi" in name_low:
-        kws.update(["cpi", "inflation", "consumer price"])
-    if "ppi" in name_low:
-        kws.update(["ppi", "producer price"])
-    if "non-farm" in name_low or "employment" in name_low:
-        kws.update(["nfp", "payroll", "jobs", "unemployment"])
-    if "fomc" in name_low or "powell" in name_low or "federal funds" in name_low:
-        kws.update(["fomc", "powell", "fed ", "federal reserve", "rate cut", "rate hike", "interest rate"])
-    if "boj" in name_low or "ueda" in name_low:
-        kws.update(["boj", "ueda", "bank of japan"])
-    if "gdp" in name_low:
-        kws.update(["gdp", "gross domestic"])
-    if "pce" in name_low:
-        kws.update(["pce", "personal consumption"])
-    return list(kws)
-
-
-def _collect_live_event_headlines(ev: dict) -> str:
-    """ইভেন্ট শুরু হওয়ার পর শুধুমাত্র ওই ইভেন্টের সাথে সরাসরি সম্পর্কিত অফিশিয়াল ডাটা ও
-    ব্রেকিং বক্তব্য সংগ্রহ করে (অপ্রাসঙ্গিক খবর যেমন স্ট্রাইপ/অল্টকয়েন নিউজ সম্পূর্ণ বাদ)।"""
-    snippets: List[str] = []
-    for sub in ev.get("sub_events") or [ev]:
-        if sub.get("actual") or sub.get("forecast") or sub.get("previous"):
-            snippets.append(
-                f"Official Data — {sub.get('name')}: Actual={sub.get('actual') or 'Not released yet'}, "
-                f"Forecast={sub.get('forecast') or 'N/A'}, Previous={sub.get('previous') or 'N/A'}"
-            )
-
-    kws = _event_matching_keywords(ev)
-    if kws:
-        now_utc = datetime.now(timezone.utc)
-        for ch in ("WatcherGuru", "unfolded", "cointelegraph", "CoindeskGlobal"):
-            try:
-                for it in _fetch_single_channel(ch):
-                    if it.published and (now_utc - it.published).total_seconds() <= 1200:
-                        t_low = it.title.lower()
-                        if any(k in t_low for k in kws):
-                            snippets.append(f"[{ch}] {it.title[:220]}")
-            except Exception:
-                continue
-
-    if not snippets:
-        return "এই ইভেন্টে এখন পর্যন্ত নতুন কোনো বিশেষ ঘোষণা বা সংখ্যার পরিবর্তন পাওয়া যায়নি।"
-    return "\n".join(snippets[:6])
-
-
-# ---- জেমিনি প্রম্পট ----
-_EVENT_PRE_PROMPT = """তুমি একজন অভিজ্ঞ ক্রিপ্টো মার্কেট অ্যানালিস্ট। ১ ঘণ্টা পর নিচের অর্থনৈতিক ইভেন্টটি শুরু হবে:
-নাম: {name} | মুদ্রা: {currency}
-সম্ভাব্য ক্রিপ্টো ইমপ্যাক্ট: {impact_level} (সম্ভাব্য মুভমেন্ট: {move_range})
-প্রাক-মার্কেট সিগন্যাল: {bias_label}
+# ---- জেমিনি প্রম্পট (বাংলা সংক্ষিপ্ত বিশ্লেষণ; ব্যর্থ হলে টেমপ্লেট ফলব্যাক) ----
+_EVENT_PRE_PROMPT = """তুমি একজন ক্রিপ্টো মার্কেট অ্যানালিস্ট। নিচে অর্থনৈতিক ইভেন্টের তথ্য:
+নাম: {name} | মুদ্রা: {currency} | ইমপ্যাক্ট: High
 বাংলাদেশ সময়: {bd_time} | পূর্বাভাস: {forecast} | পূর্বের: {previous}
 
-১৫০-২৪০ অক্ষরের সহজ ও বাস্তবসম্মত বাংলা আগাম বিশ্লেষণ লেখো:
-- যদি প্রাক-মার্কেট সিগন্যাল AUTO-BULLISH বা AUTO-BEARISH হয়, তবেই শুধু বলবে কেন ইভেন্ট শুরু হওয়া মাত্র মার্কেটে অটোমেটিক পাম্প বা ডাম্প হতে পারে।
-- আর যদি প্রাক-মার্কেট সিগন্যাল না থাকে (সাধারণ ইভেন্ট বা ভাষণ হয়), তবে অটো-পাম্পের কথা একদমই বলবে না; বরং স্পষ্ট করে বলবে ফলাফল পূর্বাভাসের চেয়ে কম/বেশি এলে বা ভাষণে কী বললে মার্কেটে কতটুকু বুলিশ বা বিয়ারিশ ইমপ্যাক্ট পড়তে পারে।
-শুধু বাংলা প্লেইন টেক্সট (markdown নয়), সর্বোচ্চ ৪২০ অক্ষর।"""
+১২০-১৮০ অক্ষরের বাংলা সংক্ষেপ লেখো যাতে থাকে:
+(১) এই ইভেন্ট কী এবং কয়টায় (বাংলাদেশ সময়) হচ্ছে;
+(২) ফোরকাস্টের তুলনায় ফল বেশি হলে/কম হলে কী হতে পারে — কোনটা বুলিশ, কোনটা বিয়ারিশ;
+(৩) নিশ্চয়তার ভাষা নয় — "হতে পারে/সম্ভাবনা" ধরনের শব্দ।
+শুধু বাংলা প্লেইন টেক্সট (markdown নয়), সর্বোচ্চ ৪০০ অক্ষর।"""
 
-_EVENT_IMPACT_PROMPT = """তুমি একজন সিনিয়র ও সৎ ক্রিপ্টো মার্কেট অ্যানালিস্ট। "{name}" ({currency}) ইভেন্টটি এইমাত্র প্রকাশিত হয়েছে।
-তোমার কাজ হলো এই ইভেন্টে সত্যিকার অর্থে কী পাস হলো এবং ক্রিপ্টো মার্কেটে এর আসলেই কোনো ইমপ্যাক্ট পড়বে নাকি পড়বে না, তা একদম সত্য ও বাস্তবসম্মতভাবে বিশ্লেষণ করা (অযথা বাড়িয়ে বলবে না এবং অন্য কোনো অপ্রাসঙ্গিক খবরের কথা আনবে না):
+_EVENT_IMPACT_PROMPT = """তুমি ক্রিপ্টো মার্কেট অ্যানালিস্ট। "{name}" ইভেন্ট এইমাত্র শেষ হয়েছে।
+আসল ফল: {actual} | পূর্বাভাস: {forecast} | পূর্বের: {previous}
+ইভেন্টের আগে থেকে এখন: BTC {btc_line} | ETH {eth_line}
 
-ইভেন্টের অফিশিয়াল ফলাফল: আসল (Actual): {actual} | পূর্বাভাস (Forecast): {forecast} | পূর্বের (Previous): {previous}
-ইভেন্ট সংশ্লিষ্ট সদ্য পাওয়া তথ্য:
-{live_context}
-ইভেন্টের আগে থেকে বর্তমান দাম: BTC {btc_line} | ETH {eth_line}
-ইভেন্টটি কি মেজর দীর্ঘমেয়াদী ইভেন্ট?: {is_major_event}
-
-নিয়ম:
-১) impact_type:
-   - যদি ফলাফল পূর্বাভাসের খুব কাছাকাছি হয় অথবা ভাষণে ক্রিপ্টো/সুদের হার নিয়ে নতুন কোনো বড় সিদ্ধান্ত না থাকে এবং মার্কেটে তেমন কোনো ইমপ্যাক্ট না পড়ে (যেমন BTC/ETH পরিবর্তন ০.৫% এর কম), তবে "impact_type": "NONE" দাও।
-   - যদি এই ইভেন্টের কারণে মার্কেটে এখন তাৎক্ষণিক ইমপ্যাক্ট পড়ে, কিন্তু এটি পরবর্তী কয়েক দিন মার্কেটকে ধরে রাখার মতো বড় ফলাফল না হয়, তবে "impact_type": "SHORT_TERM" দাও।
-   - শুধুমাত্র যদি এটি একটি মেজর ইভেন্ট হয় (যেমন CPI, NFP, FOMC সুদের হার) এবং ফলাফল পূর্বাভাসের চেয়ে অনেক ভিন্ন আসে যার ইমপ্যাক্ট সত্যিকার অর্থেই পরবর্তী কিছু সময় বা কয়েক দিন মার্কেটকে সেই ট্রেন্ডে ধরে রাখবে, কেবল তখনই "impact_type": "LASTING" দাও।
-২) signal: "BULLISH" অথবা "BEARISH" অথবা "NEUTRAL" (কোনো ইমপ্যাক্ট না থাকলে অবশ্যই "NEUTRAL")।
-৩) what_passed_bn: শুধুমাত্র এই "{name}" ইভেন্টে কী পাস হলো বা কী ডাটা এলো তা স্পষ্ট বাংলায় লেখো (৯০-১৭০ অক্ষর)।
-৪) instant_impact_bn: সত্যিকার অর্থে মার্কেটে কতটুকু ইমপ্যাক্ট পড়বে তা লেখো — যদি কোনো ইমপ্যাক্ট না পড়ে তবে সরাসরি বলো যে এই ফলাফল প্রত্যাশিত হওয়ায় মার্কেটে এর কোনো উল্লেখযোগ্য প্রভাব পড়েনি (৯০-১৭০ অক্ষর)।
-৫) next_days_bn: শুধুমাত্র যদি impact_type == "LASTING" হয়, তবেই পরবর্তীতে মার্কেট কেমন চলতে পারে তা ১০০-১৭০ অক্ষরে লেখো। অন্যথায় (NONE বা SHORT_TERM হলে) এটি খালি স্ট্রিং "" রাখো!
-
-শুধু নিচের JSON ফরম্যাটে উত্তর দাও:
-{{
-  "impact_type": "NONE|SHORT_TERM|LASTING",
-  "signal": "BULLISH|BEARISH|NEUTRAL",
-  "what_passed_bn": "...",
-  "instant_impact_bn": "...",
-  "next_days_bn": "..."
-}}"""
+১২০-১৮০ অক্ষরের বাংলা সংক্ষেপ লেখো:
+(১) ফল পূর্বাভাসের সাথে তুলনা করে এক লাইনে কী এলো;
+(২) বাজার কেন এভাবে রিঅ্যাক্ট করলো;
+(৩) সম্ভাব্য পরবর্তী প্রভাব। শুধু বাংলা প্লেইন টেক্সট, সর্বোচ্চ ৪০০ অক্ষর।"""
 
 
 def _event_gemini_text(prompt: str) -> Optional[str]:
-    """জেমিনি দিয়ে ইভেন্ট-বিশ্লেষণ লেখায়।"""
+    """জেমিনি দিয়ে ইভেন্ট-বিশ্লেষণ লেখায় (প্রাইমারি → ফলব্যাক মডেল)।
+    সময় সীমিত (T−৬০/ইমপ্যাক্ট) বলে কোনো অতিরিক্ত delay নেই; ব্যর্থ হলে
+    None — কলার টেমপ্লেট ফলব্যাক ব্যবহার করবে, অ্যালার্ট কখনো আটকবে না।"""
     models = [Config.GEMINI_TEXT_MODEL]
     if Config.GEMINI_FALLBACK_MODEL and Config.GEMINI_FALLBACK_MODEL != Config.GEMINI_TEXT_MODEL:
         models.append(Config.GEMINI_FALLBACK_MODEL)
     for model_name in models:
         try:
             text = _call_gemini(model_name, prompt)
-            if text and len(text.strip()) >= 30:
-                return text.strip()[:1500]
+            if text and len(text.strip()) >= 40:
+                return text.strip()[:900]
         except Exception as e:
             log.warning("ইভেন্ট বিশ্লেষণ Gemini ব্যর্থ (%s): %s", model_name, e)
     return None
 
 
-def _parse_impact_json(raw_text: Optional[str], ev: dict,
-                       before: Dict[str, Optional[float]],
-                       after: Dict[str, Optional[float]]) -> Dict[str, str]:
-    """T+0 লাইভ ইভেন্ট রিপোর্টের JSON পার্স করে ও যাচাই করে।"""
-    b_btc, a_btc = before.get("BTC"), after.get("BTC")
-    btc_pct = ((a_btc - b_btc) / b_btc * 100.0) if (b_btc and a_btc and b_btc > 0) else 0.0
-
-    default_sig = "NEUTRAL"
-    if btc_pct >= 0.50:
-        default_sig = "BULLISH"
-    elif btc_pct <= -0.50:
-        default_sig = "BEARISH"
-
-    default_impact_type = "SHORT_TERM" if abs(btc_pct) >= 0.50 else "NONE"
-    is_major = _is_major_lasting_event(ev)
-
-    if ev.get("actual"):
-        fallback_passed = (
-            f"{ev['name']} ইভেন্টের প্রকাশিত ডাটা অনুযায়ী আসল ফলাফল এসেছে {ev.get('actual')}, "
-            f"যেখানে পূর্বাভাস ছিল {ev.get('forecast') or '—'} এবং পূর্বের ছিল {ev.get('previous') or '—'}।"
-        )
-    else:
-        fallback_passed = f"{ev['name']} ইভেন্টে সুদের হার বা নীতিমালা সংক্রান্ত নতুন কোনো অপ্রত্যাশিত ঘোষণা আসেনি।"
-
-    if default_impact_type == "NONE":
-        fallback_instant = (
-            "ফলাফল প্রত্যাশার কাছাকাছি থাকায় ক্রিপ্টো মার্কেটে এর কোনো উল্লেখযোগ্য প্রভাব পড়েনি এবং বাজার স্বাভাবিক রয়েছে।"
-        )
-    else:
-        fallback_instant = (
-            f"ইভেন্ট প্রকাশের পর বিটকয়েনে {btc_pct:+.2f}% তাৎক্ষণিক মুভমেন্ট দেখা গেছে। স্বল্পমেয়াদে বাজারে কিছুটা অস্থিরতা থাকতে পারে।"
-        )
-
-    if raw_text:
-        cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw_text.strip())
-        m = re.search(r"\{.*\}", cleaned, re.S)
-        if m:
-            try:
-                data = json.loads(m.group(0))
-                if isinstance(data, dict):
-                    imp_type = str(data.get("impact_type", default_impact_type)).strip().upper()
-                    if imp_type not in ("NONE", "SHORT_TERM", "LASTING"):
-                        imp_type = default_impact_type
-                    # যদি এটি মেজর ইভেন্ট না হয়, তবে জোর করে LASTING হতে দেওয়া হবে না
-                    if imp_type == "LASTING" and not is_major:
-                        imp_type = "SHORT_TERM"
-
-                    sig = str(data.get("signal", default_sig)).strip().upper()
-                    if sig not in ("BULLISH", "BEARISH", "NEUTRAL"):
-                        sig = default_sig
-                    if imp_type == "NONE":
-                        sig = "NEUTRAL"
-
-                    next_days = str(data.get("next_days_bn") or "").strip() if imp_type == "LASTING" else ""
-                    return {
-                        "impact_type": imp_type,
-                        "signal": sig,
-                        "what_passed_bn": str(data.get("what_passed_bn") or fallback_passed).strip(),
-                        "instant_impact_bn": str(data.get("instant_impact_bn") or fallback_instant).strip(),
-                        "next_days_bn": next_days,
-                    }
-            except Exception:
-                pass
-
-    return {
-        "impact_type": default_impact_type,
-        "signal": default_sig,
-        "what_passed_bn": fallback_passed,
-        "instant_impact_bn": fallback_instant,
-        "next_days_bn": "",
-    }
-
-
 def _build_pre_event_msg(ev: dict, analysis: str, bd_time: str) -> str:
-    """T−৬০ বার্তা (HTML):
-    শুধুমাত্র সত্যিকারের অটো-বুলিশ/অটো-বিয়ারিশ ইভেন্ট হলেই '🎯 প্রাক-মার্কেট সিগন্যাল'
-    লাইনটি দেখাবে; অন্যথায় ঐ লাইনটি একদমই থাকবে না!"""
-    impact_level, move_range = _estimate_crypto_impact(ev)
-    bias_code, bias_label = _detect_pre_event_bias(ev)
-
-    header_lines = [
-        "🔔 <b>ইভেন্ট অ্যালার্ট: " + html_escape(ev["name"]) + "</b>",
-        "📅 <b>বাংলাদেশ সময়: " + bd_time + "</b>",
-        "💱 কারেন্সি: <b>" + html_escape(ev["currency"]) + "</b>" +
-        " | 📌 পূর্বাভাস: <b>" + html_escape(ev["forecast"] or "—") + "</b>" +
-        " | পূর্বের: <b>" + html_escape(ev["previous"] or "—") + "</b>",
-        "📊 <b>সম্ভাব্য মার্কেট ইমপ্যাক্ট:</b> " + impact_level + " (<b>" + move_range + "</b>)",
-    ]
-    if bias_code in ("AUTO_BULLISH", "AUTO_BEARISH") and bias_label:
-        header_lines.append("🎯 <b>প্রাক-মার্কেট সিগন্যাল:</b> <b>" + bias_label + "</b>")
-
-    header_lines.extend([
-        "",
-        "🧠 <b>আগাম বিশ্লেষণ:</b>",
-        html_escape(analysis),
-        "",
-        "⚡ ইভেন্ট শুরু হওয়ার পর ভেতরে কী পাস হলো এবং মার্কেটে সত্যিকারের কতটুকু ইমপ্যাক্ট পড়বে তা জানিয়ে দেওয়া হবে।",
-    ])
-    return "\n".join(header_lines)
+    """T−৬০ বার্তা (HTML) — নাম, বাংলাদেশ সময়, forecast/previous, বিশ্লেষণ।"""
+    return (
+        "🔔 <b>ইভেন্ট অ্যালার্ট: " + html_escape(ev["name"]) + "</b>\n"
+        "📅 <b>বাংলাদেশ সময়: " + bd_time + "</b>\n"
+        "💱 " + html_escape(ev["currency"]) +
+        " | 📌 পূর্বাভাস: " + html_escape(ev["forecast"] or "—") +
+        " | পূর্বের: " + html_escape(ev["previous"] or "—") + "\n\n"
+        + analysis + "\n\n"
+        "⚠️ ইভেন্ট শেষ হলে ফলাফল ও মার্কেট-ইমপ্যাক্ট এখানেই পোস্ট হবে।"
+    )
 
 
-def _build_impact_event_msg(ev: dict, report: Dict[str, str],
+def _build_impact_event_msg(ev: dict, analysis: str,
                             before: Dict[str, Optional[float]],
                             after: Dict[str, Optional[float]]) -> str:
-    """T+0 (ইভেন্ট শুরু হওয়ার পর) লাইভ রিপোর্ট ও সিদ্ধান্ত বার্তা (HTML):
-    - যা পাস হলো এবং মার্কেটে সত্যিকারের যতটুকু ইমপ্যাক্ট পড়বে শুধু সেটাই বলবে।
-    - শুধুমাত্র যখন ইভেন্টের ইমপ্যাক্ট দীর্ঘমেয়াদী (impact_type == 'LASTING') হবে এবং
-      পরবর্তীতে কিছু সময় মার্কেটকে ধরে রাখবে, কেবল তখনই নিচে '🗓️ পরবর্তীতে মার্কেট কেমন চলতে পারে'
-      অংশটি থাকবে; অন্যথায় থাকবে না!"""
-    signal = report.get("signal", "NEUTRAL")
-    impact_type = report.get("impact_type", "NONE")
-
-    if impact_type == "NONE" or signal == "NEUTRAL":
-        sig_label = "NO SIGNIFICANT IMPACT ⚪ (উল্লেখযোগ্য প্রভাব নেই)"
-    elif signal == "BULLISH":
-        sig_label = "BULLISH 🟢 (বুলিশ ইমপ্যাক্ট)"
-    else:
-        sig_label = "BEARISH 🔴 (বিয়ারিশ ইমপ্যাক্ট)"
-
-    lines = [
-        "🚨 <b>ইভেন্ট লাইভ রিপোর্ট ও সিদ্ধান্ত: " + html_escape(ev["name"]) + "</b>",
-        "",
-        "📢 <b>ইভেন্টে যা পাস হলো / মূল ফলাফল:</b>",
-        "• " + html_escape(report.get("what_passed_bn") or ""),
-    ]
-    if ev.get("actual") or ev.get("forecast") or ev.get("previous"):
+    """ইভেন্ট-পরের ফলাফল বার্তা (HTML): আসল ফল + BTC/ETH % পরিবর্তন + বিশ্লেষণ।"""
+    lines = ["✅ <b>" + html_escape(ev["name"]) + " — ফলাফল ও মার্কেট-ইমপ্যাক্ট</b>"]
+    if ev.get("actual"):
         lines.append(
-            "📌 আসল ডাটা: <b>" + html_escape(ev.get("actual") or "—") + "</b>"
-            " | পূর্বাভাস: " + html_escape(ev.get("forecast") or "—") +
-            " | পূর্বের: " + html_escape(ev.get("previous") or "—")
+            "📌 আসল: <b>" + html_escape(ev["actual"]) + "</b>"
+            " | পূর্বাভাস: " + html_escape(ev["forecast"] or "—") +
+            " | পূর্বের: " + html_escape(ev["previous"] or "—")
         )
-
-    lines.append("")
-    lines.append("📊 <b>ক্রিপ্টো মার্কেটের ওপর প্রভাব:</b> <b>" + sig_label + "</b>")
-
-    price_parts = []
     for tag in ("BTC", "ETH"):
         b, a = before.get(tag), after.get(tag)
         if a is None:
@@ -2408,37 +2141,17 @@ def _build_impact_event_msg(ev: dict, report: Dict[str, str],
         if b is not None and b > 0:
             pct = (a - b) / b * 100.0
             arrow = "📈" if pct >= 0 else "📉"
-            price_parts.append(f"{arrow} <b>{tag}:</b> {pct:+.2f}% (${b:,.0f} → ${a:,.0f})")
+            lines.append(f"{arrow} {tag}: {pct:+.2f}% (${b:,.0f} → ${a:,.0f})")
         else:
-            price_parts.append(f"🔹 <b>{tag}:</b> ${a:,.0f}")
-    if price_parts:
-        lines.append(" | ".join(price_parts))
-
-    lines.extend([
-        "",
-        "⚡ <b>মার্কেট ইমপ্যাক্ট বিশ্লেষণ:</b>",
-        html_escape(report.get("instant_impact_bn") or ""),
-    ])
-
-    # শুধুমাত্র যখন সত্যিকারের বড় ইমপ্যাক্ট পড়বে যা পরবর্তী কিছু সময় মার্কেটকে ধরে রাখবে,
-    # কেবল তখনই এই অংশটি যোগ হবে!
-    next_days = (report.get("next_days_bn") or "").strip()
-    if impact_type == "LASTING" and next_days:
-        lines.extend([
-            "",
-            "🗓️ <b>পরবর্তীতে মার্কেট কেমন চলতে পারে:</b>",
-            html_escape(next_days),
-        ])
-
-    lines.extend([
-        "",
-        f'🔔 <b>Follow: <a href="{html_escape(Config.FOLLOW_CHANNEL_URL)}">CRYPTO UPDATE</a></b>',
-    ])
+            lines.append(f"🔹 {tag} এখন: ${a:,.0f}")
+    lines.append("")
+    lines.append(html_escape(analysis))
     return "\n".join(lines)
 
 
 def _row_dict(cur) -> dict:
-    """fetchone()-এর ফলাফল dict-এ রূপান্তর।"""
+    """fetchone()-এর ফলাফল dict-এ রূপান্তর (গেটডবেতে row_factory নেই —
+    পুরনো কোড tuple-ইনডেক্স ব্যবহার করে, তাই নতুন ইভেন্ট-কোড dict নেয়)।"""
     r = cur.fetchone()
     if r is None:
         return None
@@ -2446,7 +2159,9 @@ def _row_dict(cur) -> dict:
 
 
 def _get_or_create_event_row(conn, ev: dict):
-    """economic_events-এ ইভেন্টের রো (না থাকলে তৈরি) ফেরত দেয়।"""
+    """economic_events-এ ইভেন্টের রো (না থাকলে তৈরি) ফেরত দেয়।
+    ইভেন্ট আগেই শেষ+EVENT_IMPACT_DELAY হয়ে গেলে (বট বন্ধ ছিল) নীরবে stage=3 —
+    বট চালু হওয়ামাত্র পুরনো ইভেন্টের অ্যালার্ট ফেলে দেওয়া বন্ধ।"""
     key = f"{ev['ff_id']}_{ev['dateline']}"
     cur = conn.execute(
         "SELECT * FROM economic_events WHERE event_key = ?", (key,)
@@ -2454,7 +2169,7 @@ def _get_or_create_event_row(conn, ev: dict):
     row = _row_dict(cur)
     if row is None:
         start_stage = 3 if time.time() >= (
-            ev["dateline"] + max(300, Config.EVENT_IMPACT_DELAY * 60)
+            ev["dateline"] + Config.EVENT_IMPACT_DELAY * 60
         ) else 0
         conn.execute(
             "INSERT INTO economic_events (event_key, name, event_time_utc, stage,"
@@ -2471,43 +2186,34 @@ def _get_or_create_event_row(conn, ev: dict):
 
 
 def _reload_event_row(conn, key: str):
-    """স্টেজ আপডেটের পরে রো আবার পড়ে।"""
+    """স্টেজ আপডেটের পরে রো আবার পড়ে (পুরনো ডেটা নিয়ে সিদ্ধান্ত নয়)।"""
     return _row_dict(conn.execute(
         "SELECT * FROM economic_events WHERE event_key = ?", (key,)
     ))
 
 
 def _do_pre_alert(conn, ev: dict) -> None:
-    """T−৬০ ধাপ: আগাম পূর্বাভাস বার্তা পাঠাও → সাথে সাথে পিন → বেসলাইন দাম সেভ।"""
+    """T−৬০ ধাপ: বিশ্লেষণ-বার্তা পাঠাও → সাথে সাথে পিন → বেসলাইন দাম সেভ।
+    পাঠানো না গেলে স্টেজ অপরিবর্তিত — পরের সাইকেলে আবার চেষ্টা (ডুপ ঝুঁকি নেই,
+    কারণ ব্যর্থ মানে মেসেজই চ্যানেলে পৌঁছায়নি)।"""
     key = f"{ev['ff_id']}_{ev['dateline']}"
+    # ইভেন্টের আগের দাম — পরে % হিসাবের বেসলাইন (ফেল হলেও বার্তা যাবে)
     pre_btc = fetch_spot_price("BTCUSDT")
     pre_eth = fetch_spot_price("ETHUSDT")
     bd_time = _bd_time_str(ev["dateline"])
-    impact_level, move_range = _estimate_crypto_impact(ev)
-    bias_code, bias_label = _detect_pre_event_bias(ev)
     prompt = _EVENT_PRE_PROMPT.format(
         name=ev["name"], currency=ev["currency"], bd_time=bd_time,
         forecast=ev["forecast"] or "—", previous=ev["previous"] or "—",
-        impact_level=impact_level, move_range=move_range,
-        bias_label=bias_label or "সাধারণ (ফলাফল বা বক্তব্যের ওপর নির্ভরশীল)",
     )
     analysis = _event_gemini_text(prompt)
     if analysis is None:
-        if bias_code == "AUTO_BULLISH":
-            analysis = (
-                f"পূর্বের ডাটার ({ev['previous'] or '—'}) তুলনায় আজকের পূর্বাভাস ({ev['forecast'] or '—'}) অনেক অনুকূলে "
-                f"থাকায় ইভেন্ট শুরু হওয়ার সাথে সাথেই মার্কেটে {move_range} অটোমেটিক বুলিশ মুভমেন্ট হতে পারে।"
-            )
-        elif bias_code == "AUTO_BEARISH":
-            analysis = (
-                f"পূর্বের ডাটার ({ev['previous'] or '—'}) তুলনায় আজকের পূর্বাভাস ({ev['forecast'] or '—'}) প্রতিকূলে "
-                f"থাকায় ইভেন্ট শুরু হওয়ার সাথে সাথেই মার্কেটে {move_range} বিয়ারিশ চাপ তৈরি হতে পারে।"
-            )
-        else:
-            analysis = (
-                f"{ev['name']} ইভেন্টটি বাংলাদেশ সময় {bd_time}-এ প্রকাশিত হবে। ফলাফল বা বক্তব্য ক্রিপ্টো ও সুদের হারের "
-                f"অনুকূলে এলে মার্কেটে বুলিশ মুভমেন্ট এবং প্রতিকূলে গেলে বিয়ারিশ মুভমেন্ট হতে পারে।"
-            )
+        analysis = (
+            f"{ev['name']} — বাংলাদেশ সময় {bd_time} এ {ev['currency']}-এর "
+            f"হাই-ইমপ্যাক্ট ইভেন্ট। পূর্বাভাস {ev['forecast'] or '—'}, "
+            f"পূর্বের {ev['previous'] or '—'}। ফলাফল অপেক্ষার সাথে সাথে "
+            f"বাজারে তীব্র প্রভাব ফেলতে পারে — পূর্বাভাসের তুলনায় বেশি হলে "
+            f"বিয়ারিশ/কম হলে বুলিশ প্রতিক্রিয়ার সম্ভাবনা।"
+        )
     msg = _build_pre_event_msg(ev, analysis, bd_time)
     mid = send_text_message_id(msg, parse_mode="HTML")
     if mid is None:
@@ -2524,14 +2230,17 @@ def _do_pre_alert(conn, ev: dict) -> None:
 
 
 def _do_t30_update(conn, ev: dict) -> None:
-    """T−৩০ ধাপ: নতুন মেসেজ নয় — পিন করা একই মেসেজ EDIT + আবার RE-PIN।"""
+    """T−৩০ ধাপ: নতুন মেসেজ নয় — পিন করা একই মেসেজ EDIT + আবার RE-PIN।
+    edit-এ কোনো পুশ নোটিফিকেশন যায় না (টেলিগ্রাম-সীমা), তাই রি-পিন করা হয় —
+    পিন-নোটিফিকেশন আরেকবার যায়, মূল বার্তা তবু একবারই পাঠানো থাকে।"""
     key = f"{ev['ff_id']}_{ev['dateline']}"
     row = _reload_event_row(conn, key)
     if int(row["stage"]) < 1:
+        # T-60 এখনো যায়নি (নেট/-API সমস্যা) — আগে পাঠাও+পিন করাও
         _do_pre_alert(conn, ev)
         row = _reload_event_row(conn, key)
         if row is None or int(row["stage"]) < 1 or row["pinned_msg_id"] is None:
-            return
+            return        # এখনো যায়নি — পরের সাইকেলে আবার চেষ্টা হবে
     mid = row["pinned_msg_id"]
     bd_time = _bd_time_str(ev["dateline"])
     text30 = (f"⚠️ <b>৩০ মিনিট বাকি!</b> (ঘটনা: {bd_time})\n\n"
@@ -2539,7 +2248,7 @@ def _do_t30_update(conn, ev: dict) -> None:
     if not edit_text_message(mid, text30, parse_mode="HTML"):
         log.warning("ইভেন্ট T-30 এডিট ব্যর্থ — আবার চেষ্টা হবে [%s]", ev["name"])
         return
-    pin_message(mid)
+    pin_message(mid)          # রি-পিন = নতুন মেসেজ ছাড়াই আরেকবার অ্যালার্ট
     conn.execute(
         "UPDATE economic_events SET stage=2 WHERE event_key=?", (key,)
     )
@@ -2548,26 +2257,16 @@ def _do_t30_update(conn, ev: dict) -> None:
 
 
 def _do_impact(conn, ev: dict) -> None:
-    """ইভেন্ট শুরু হওয়ার পর (T+0) আসল ফলাফল ও সত্যিকারের ইমপ্যাক্ট বিশ্লেষণ পোস্ট করে।"""
+    """ইভেন্ট-পরের ধাপ: আসল ফল + BTC/ETH % পরিবর্তন বিশ্লেষণ পোস্ট → আনপিন।
+    পোস্ট ব্যর্থ হলে স্টেজ অপরিবর্তিত — পরের সাইকেলে আবার চেষ্টা।"""
     key = f"{ev['ff_id']}_{ev['dateline']}"
     row = _reload_event_row(conn, key)
-    if row is None or int(row["stage"]) >= 3:
-        return
-
+    # আসল ফল ক্যালেন্ডার ক্যাশে এখনো না এসে থাকতে পারে — একবার বাধ্যতামূলক রিফ্রেশ
     if not ev.get("actual"):
         for e2 in fetch_economic_events(force=True):
             if (e2["ff_id"], e2["dateline"]) == (ev["ff_id"], ev["dateline"]):
                 ev = e2
                 break
-
-    has_numeric_expectation = bool(ev.get("forecast") or ev.get("previous"))
-    elapsed_since_event = time.time() - float(ev["dateline"])
-    if (has_numeric_expectation and not ev.get("actual")
-            and 0 <= elapsed_since_event < Config.EVENT_ACTUAL_WAIT_MAX_SECONDS):
-        log.info("ইভেন্ট শুরু হয়েছে [%s] — লাইভ ডাটা (Actual) প্রকাশের অপেক্ষায় (%.0fs)...",
-                 ev["name"], elapsed_since_event)
-        return
-
     before = {"BTC": row["pre_btc"], "ETH": row["pre_eth"]}
     after = {"BTC": fetch_spot_price("BTCUSDT"),
              "ETH": fetch_spot_price("ETHUSDT")}
@@ -2575,27 +2274,26 @@ def _do_impact(conn, ev: dict) -> None:
     def _delta_line(tag: str) -> str:
         b, a = before.get(tag), after.get(tag)
         if b is None or a is None or b <= 0:
-            return f"${a:,.0f}" if a else "দাম পাওয়া যায়নি"
+            return "দাম পাওয়া যায়নি"
         return f"{(a - b) / b * 100.0:+.2f}% (${b:,.0f} → ${a:,.0f})"
 
-    live_context = _collect_live_event_headlines(ev)
-    is_major = "হ্যাঁ (মেজর ইভেন্ট)" if _is_major_lasting_event(ev) else "না (সাধারণ ইভেন্ট)"
     prompt = _EVENT_IMPACT_PROMPT.format(
-        name=ev["name"], currency=ev["currency"],
-        actual=ev.get("actual") or "সংখ্যা নেই (ভাষণ/বিবৃতি)",
+        name=ev["name"], actual=ev.get("actual") or "(ঘোষণা হয়নি)",
         forecast=ev.get("forecast") or "—", previous=ev.get("previous") or "—",
-        live_context=live_context,
         btc_line=_delta_line("BTC"), eth_line=_delta_line("ETH"),
-        is_major_event=is_major,
     )
-    raw_ai = _event_gemini_text(prompt)
-    report = _parse_impact_json(raw_ai, ev, before, after)
-    msg = _build_impact_event_msg(ev, report, before, after)
+    analysis = _event_gemini_text(prompt)
+    if analysis is None:
+        analysis = ("ইভেন্টের ফলাফলের সাথে সাথে বিটকয়েন ও ইথেরিয়ামের দামে "
+                    "তাৎক্ষণিক প্রতিক্রিয়া দেখা গেছে — উপরের শতাংশগুলো "
+                    "ইভেন্টের আগে-পরের তুলনা। পরবর্তী কয়েক ঘণ্টা বাজার "
+                    "পর্যবেক্ষণে থাকুন।")
+    msg = _build_impact_event_msg(ev, analysis, before, after)
     if not send_text_message(msg, parse_mode="HTML"):
-        log.warning("ইভেন্ট লাইভ রিপোর্ট পোস্ট যায়নি — পরের লুপেই আবার চেষ্টা হবে [%s]",
+        log.warning("ইভেন্ট ইমপ্যাক্ট পোস্ট যায়নি — আবার চেষ্টা হবে [%s]",
                     ev["name"])
         return
-
+    # পোস্ট সফল → আগের পিন করা অ্যালার্ট আনপিন
     if row["pinned_msg_id"]:
         unpin_message(row["pinned_msg_id"])
     conn.execute(
@@ -2603,17 +2301,18 @@ def _do_impact(conn, ev: dict) -> None:
         (ev.get("actual") or "", key),
     )
     conn.commit()
-    log.info("🚨 ইনস্ট্যান্ট ইভেন্ট লাইভ রিপোর্ট ও সিদ্ধান্ত পোস্ট + আনপিন ✅ [%s | %s | %s]",
-             ev["name"], report.get("impact_type"), report.get("signal"))
+    log.info("ইভেন্ট ফলাফল+ইমপ্যাক্ট পোস্ট ও আনপিন ✅ [%s]", ev["name"])
 
 
-def check_economic_events(conn) -> bool:
-    """আসন্ন ইভেন্টের ধাপ চালায়।"""
+def check_economic_events(conn) -> None:
+    """প্রতি নিউজ-সাইকেলে কল হয় — আসন্ন ইভেন্টের ধাপ চালায়:
+    T−৬০ → পাঠাও+পিন; T−৩০ → একই মেসেজ এডিট+রি-পিন; T+EVENT_IMPACT_DELAY →
+    ফলাফল-পোস্ট + আনপিন। প্রতিটি ধাপ economic_events.stage-তে সেভ থাকে বলে
+    রিস্টার্ট/ডিপ্লয়েও কোনো ধাপ দুবার বা বাদ যায় না।"""
     events = fetch_economic_events()
     if not events:
-        return False
+        return
     now = time.time()
-    fast_poll_needed = False
     for ev in events:
         try:
             row = _get_or_create_event_row(conn, ev)
@@ -2623,29 +2322,95 @@ def check_economic_events(conn) -> bool:
             t1 = ev["dateline"] - Config.EVENT_ALERT_LEAD_1 * 60
             t2 = ev["dateline"] - Config.EVENT_ALERT_LEAD_2 * 60
             t3 = ev["dateline"] + Config.EVENT_IMPACT_DELAY * 60
-            if abs(now - ev["dateline"]) <= 180:
-                fast_poll_needed = True
             if now >= t3:
-                _do_impact(conn, ev)
-            elif now >= t2 and stage < 2:
-                _do_t30_update(conn, ev)
+                _do_impact(conn, ev)               # ইভেন্ট শেষ — ফলাফল + আনপিন
+            elif now >= t2:
+                _do_t30_update(conn, ev)            # (দরকার হলে T-60 নিজে পাঠায়)
             elif now >= t1 and stage < 1:
                 _do_pre_alert(conn, ev)
         except Exception as e:
             log.exception("ইভেন্ট প্রসেস এক্সেপশন (%s): %s", ev.get("name"), e)
-    return fast_poll_needed
 
 
-def event_alert_loop() -> None:
-    """ইকোনমিক ইভেন্টের জন্য আলাদা ডেডিকেটেড daemon থ্রেড (নিজস্ব DB কানেকশন)।"""
-    conn = get_db()
-    while True:
-        try:
-            fast = check_economic_events(conn)
-            time.sleep(5 if fast else Config.EVENT_LOOP_SLEEP_SECONDS)
-        except Exception:
-            log.exception("event_alert_loop-এ অপ্রত্যাশিত এক্সেপশন — লুপ চালিয়ে যাচ্ছি")
-            time.sleep(15)
+# =============================================================================
+# ৫.১০ সকালের ডাইজেস্ট — প্রতিদিন BD সকালে আজকের high-impact ইভেন্ট তালিকা
+#    (bot_meta-তে তারিখ সেভ থাকায় দিনে একবার; ইভেন্ট না থাকলেও ছোট মেসেজ =
+#     বট-হার্টবিট; ক্যালেন্ডার এখনো সফলভাবে আনা হয়নি তবে উইন্ডোভেতেই থাকে)
+# =============================================================================
+def _digest_window_ok(now_bd: datetime) -> bool:
+    """BD সময়ে ৯:০০–১১:৫৯-এর মধ্যে কিনা (নির্দিষ্ট ঘণ্টা কনফিগযোগ্য;
+    বট বন্ধ থাকা অবস্থায় দেওয়াল-ঘড়ি ১২টার আগে ধরতে পারে)।"""
+    if not Config.MORNING_DIGEST_ENABLED:
+        return False
+    return Config.MORNING_DIGEST_HOUR_BD <= now_bd.hour < 12
+
+
+def build_morning_digest_text(events: list, day_label: str) -> str:
+    """আজকের (BD তারিখের) ইভেন্ট দিয়ে HTML ডাইজেস্ট-টেক্সট। ইভেন্ট না থাকলেও
+    ছোট মেসেজ ফেরত — চ্যানেল নিয়মিত সক্রিয় থাকে, সেটাই বট-হার্টবিট।"""
+    lines = [
+        f"📋 <b>সুপ্রভাত — আজকের ({day_label}) high-impact ইভেন্ট</b>",
+        "",
+    ]
+    if events:
+        for ev in events:
+            bd_time = _bd_time_str(ev["dateline"])   # ৭:০০ অফসেটে BD লেবেল
+            lines.append(
+                f"🇺🇸 <b>{html_escape(bd_time)}</b> — "
+                f"<b>{html_escape(ev['name'])}</b>"
+            )
+            fc = ev.get("forecast") or "—"
+            pv = ev.get("previous") or "—"
+            lines.append(
+                f"   পূর্বাভাস: {html_escape(fc)} | পূর্বের: {html_escape(pv)}"
+            )
+    else:
+        lines.append("আজ ডলারের ক্যালেন্ডারে কোনো high-impact ইভেন্ট নেই।")
+    lines += [
+        "",
+        "⏰ ইভেন্টের ১ ঘণ্টা আগে বিস্তারিত বিশ্লেষণসহ অ্যালার্ট যাবে।",
+        f'🔔 <b>Follow: <a href="{html_escape(Config.FOLLOW_CHANNEL_URL)}">'
+        "CRYPTO UPDATE</a></b>",
+    ]
+    return "\n".join(lines)
+
+
+def check_morning_digest(conn, now_bd: Optional[datetime] = None) -> None:
+    """প্রতি মূল-সাইকেলে কল — BD সকালের উইন্ডোতে আজকের ডাইজেস্ট একবার
+    পাঠায়। আজকের তারিখ না দিলে (সাইকেল মিস করলে) পরের সাইকেলে চেষ্টা হবে;
+    ক্যালেন্ডার কখনো সফলভাবে লোড হয়নি থাকলেও সেই অপেক্ষা চলতে থাকে।"""
+    if now_bd is None:
+        now_bd = datetime.now(timezone(timedelta(hours=Config.EVENT_BD_UTC_OFFSET)))
+    if not _digest_window_ok(now_bd):
+        return
+    today = now_bd.date().isoformat()
+    row = conn.execute(
+        "SELECT value FROM bot_meta WHERE key = 'digest_last_date'"
+    ).fetchone()
+    if row and row[0] == today:
+        return                                   # আজ ইতিমধ্যে পাঠানো হয়েছে
+    events = fetch_economic_events()             # (৬০ মিনিটের ক্যাশেই ব্যবহার হবে)
+    if not events and not _EVENT_CAL_CACHE.get("fetched_at"):
+        return   # ক্যালেন্ডার এখনো একবারও সফলভাবে আনা হয়নি — পরে আবার
+    # আজকের BD তারিখের ইভেন্টই রাখি (পুরনো/আগের সব বাদ)
+    today_d = now_bd.date()
+    bd_tz = timezone(timedelta(hours=Config.EVENT_BD_UTC_OFFSET))
+    todays = [ev for ev in events
+              if datetime.fromtimestamp(ev["dateline"], tz=timezone.utc)
+                     .astimezone(bd_tz).date() == today_d]
+    todays.sort(key=lambda e: e["dateline"])
+    day_label = (f"{_bn_num(today_d.day)} {_BD_MONTHS[today_d.month]} "
+                 f"{_bn_num(today_d.year)}")
+    text = build_morning_digest_text(todays, day_label)
+    if not send_text_message(text, parse_mode="HTML"):
+        log.warning("সকালের ডাইজেস্ট যায়নি — উইন্ডোভেতে আবার চেষ্টা হবে")
+        return                                   # তারিখ লেখা হয় না → retry
+    conn.execute(
+        "INSERT OR REPLACE INTO bot_meta (key, value) VALUES (?, ?)",
+        ("digest_last_date", today),
+    )
+    conn.commit()
+    log.info("🌅 সকালের ডাইজেস্ট পাঠানো হয়েছে (%dটা ইভেন্ট)", len(todays))
 
 
 # =============================================================================
@@ -2851,54 +2616,50 @@ def _draw_candles(draw, candles: List[Tuple[float, float, float, float]],
         )
 
 
-# গিটহাবের রেফারেন্স ফটো (sample_btc_card.png ও sample_eth_card.png) এর হুবহু ৪টা ক্যান্ডেলস্টিক পিক্সেল অনুপাত
-REFERENCE_CANDLES: List[Tuple[float, float, float, float]] = [
-    (26.0, 100.0, 0.0, 78.0),    # ক্যান্ডেল ১ (সবুজ #00E676): wick 176..276, body 198..250
-    (78.0, 130.0, 48.0, 57.0),   # ক্যান্ডেল ২ (লাল #FF1744):  wick 146..228, body 198..219
-    (57.0, 187.0, 44.0, 174.0),  # ক্যান্ডেল ৩ (সবুজ #00E676): wick 89..232,  body 102..219
-    (174.0, 212.0, 126.0, 143.0) # ক্যান্ডেল ৪ (লাল #FF1744):  wick 64..150,  body 102..133
-]
-
-
-def _find_reference_card_path(symbol: str) -> Optional[str]:
-    """গিটহাব রেপোতে থাকা রেফারেন্স ফটো (sample_btc_card.png / sample_eth_card.png) খুঁজে বের করে।"""
-    fname = "sample_btc_card.png" if symbol.startswith("BTC") else "sample_eth_card.png"
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    for candidate in (
-        os.path.join(base_dir, fname),
-        fname,
-        os.path.join(base_dir, "uploads", fname),
-    ):
-        if os.path.isfile(candidate):
-            return candidate
-    return None
-
-
 def generate_price_card_bytes(symbol: str, milestone: float,
                               is_up: bool,
                               pct_24h: Optional[float] = None,
                               candles: Optional[List[Tuple[float, float, float, float]]] = None,
                               current_price: Optional[float] = None) -> Optional[bytes]:
-    """গিটহাবের রেফারেন্স ফটোর (sample_btc_card.png / sample_eth_card.png) সাথে ১০০% সেম-টু-সেম
-    প্রাইস কার্ড PNG bytes রেন্ডার করে:
-      - দাম আপ গেলে (is_up=True) বড় দামের লেখা সবুজ (#00E676)
-      - দাম ডাউন এলে (is_up=False) বড় দামের লেখা লাল (#FF1744)
-      - ডান পাশে রেফারেন্স ফটোর হুবহু নিখুঁত ৪টা ক্যান্ডেলস্টিক (REFERENCE_CANDLES)
-      - নিচে শুধুই 'BTC PRICE' / 'ETH PRICE' (অতিরিক্ত Current লাইন নেই)"""
+    """Pillow দিয়ে in-memory প্রাইস কার্ড PNG bytes রেন্ডার করে।
+
+    ডিজাইন (স্পেসিফিকেশন ৬.১):
+      - ডার্ক থিম: ব্যাকগ্রাউন্ড #050506, ভেতরে rounded কার্ড (#0B0B0D, outline #1E1E22)
+      - উচ্চতা 340 নির্ধারিত; চওড়া ডাইনামিক — বড় দাম (যেমন $100,000) কখনো
+        ডান পাশের ক্যান্ডেলের সাথে overlap না করে তার মতো
+      - বাঁয়ে কয়েন লোগো, নাম, বড় মাইলস্টোন দাম, ফুটার; ডানে ৪টা রিয়েল ক্যান্ডেল
+
+    🔴 বড় দাম টেক্সট = আসল স্পট দাম নয়, যে মাইলস্টোন ক্রস হয়েছে সেটাই
+    (ক্যাপশনের সাথে সবসময় একই সংখ্যা)। রঙ = ২৪ ঘণ্টার পরিবর্তন % অনুযায়ী।
+
+    নতুন: pct_24h / candles / current_price বাইরে থেকে (check_price_milestone-এর
+    এক-ফেচ স্ন্যাপশট) এলে সেগুলোই ব্যবহার হয় — এক পোস্টে সব সংখ্যা এক মুহূর্তের।
+    না দিলে (পুরনো কল/টেস্ট) নিজে ফেচ করে (আগের আচরণ অপরিবর্তিত)।
+    current_price থাকলে ফুটারের নিচে ছোট লেখা `Current: $xx,xxx` আঁকা হয় —
+    যাতে ব্যবহারকারী বুঝতে পারে বড় সংখ্যাটি মাইলস্টোন-বাকেট, লাইভ দাম আলাদা।
+    """
     try:
         meta = COIN_META[symbol]
         H = Config.PRICE_CARD_HEIGHT
         min_w = Config.PRICE_CARD_WIDTH
 
-        # ---- দামের রঙ: আপ গেলে সবুজ (#00E676), ডাউন এলে লাল (#FF1744) ----
-        if is_up is not None:
-            price_color = "#00E676" if is_up else "#FF1744"
-        elif pct_24h is not None:
-            price_color = "#FF1744" if pct_24h < 0 else "#00E676"
-        else:
-            price_color = "#00E676"
+        # ---- ডেটা আনা: রিয়েল ৪h ক্যান্ডেল + ২৪ঘ পরিবর্তন (বাইরে থেকে
+        # না এলে নিজে ফেচ) ----
+        if candles is None:
+            candles = fetch_recent_candles(symbol)
+        if pct_24h is None:
+            pct_24h = fetch_24hr_change_percent(symbol)
 
-        # ---- ফন্ট ও টেক্সট মাপা ----
+        # ---- ৬.৪ দামের রঙ: মাইলস্টোন-দিক দিয়ে নয়, ২৪ঘ % দিয়ে ----
+        if pct_24h is not None:
+            price_color = "#FF1744" if pct_24h < 0 else "#00E676"
+        elif is_up is not None:
+            # ফলব্যাক: ২৪ঘ এন্ডপয়েন্ট ফেল হলে মাইলস্টোন ক্রসিং দিক
+            price_color = "#00E676" if is_up else "#FF1744"
+        else:
+            price_color = "#FFFFFF"   # শেষ ফলব্যাক: সাদা
+
+        # ---- ফন্ট ও টেক্সট মাপা (ইমেজ বানানোর আগে চওড়া হিসাবের জন্য) ----
         price_text = f"${milestone:,.0f}"      # ডেসিমেল ছাড়া রাউন্ড সংখ্যা
         f_name = get_font(32)                 # "Bitcoin (BTC)" — বোল্ড সাদা
         f_price = get_font(76)                # বড় দাম — size 76 বোল্ড
@@ -2919,36 +2680,15 @@ def generate_price_card_bytes(symbol: str, milestone: float,
         text_x = logo_cx + logo_radius + 40
         text_end_x = text_x + max(name_w, price_w, footer_w)
 
+        # চওড়া = কনটেন্ট শেষ + গ্যাপ + ক্যান্ডেল ব্লক + মার্জিন;
+        # যাতে বড় দামের সংখ্যা ডান পাশের ক্যান্ডেলের সাথে কখনো overlap না করে
         candle_spacing = 64
         body_half = 13
         candle_block_w = candle_spacing * 3 + body_half * 2
         right_pad = 48
         W = max(min_w, int(text_end_x + 64 + candle_block_w + right_pad))
 
-        nb = f_name.getbbox(meta["name"])
-        y_price = 52 + (nb[3] - nb[1]) + 22
-
-        # ১) যদি গিটহাবে রেফারেন্স ফটো (sample_btc_card.png / sample_eth_card.png) থাকে এবং কার্ডের মাপ 1000x340 হয়,
-        #    তবে সরাসরি সেই রেফারেন্স ফটোটিকেই টেমপ্লেট হিসেবে নিয়ে শুধু মাঝখানের দামের লেখাটি আপডেট করা হবে!
-        ref_path = _find_reference_card_path(symbol)
-        if ref_path and W == 1000 and text_end_x <= 710:
-            try:
-                img = Image.open(ref_path).convert("RGB")
-                if img.size == (1000, 340):
-                    draw = ImageDraw.Draw(img)
-                    # শুধু পুরনো দামের অংশটুকু কার্ডের ব্যাকগ্রাউন্ড (#0B0B0D) দিয়ে মুছে নতুন দাম বসানো
-                    draw.rectangle([185, 96, 715, 190], fill=_hex_to_rgb("#0B0B0D"))
-                    draw.text((text_x, y_price), price_text, font=f_price,
-                              fill=_hex_to_rgb(price_color))
-                    buf = io.BytesIO()
-                    img.save(buf, format="PNG")
-                    log.info("প্রাইস কার্ড রেন্ডার সফল (রেফারেন্স টেমপ্লেট): %s %s (%s)",
-                             symbol, price_text, "UP/GREEN" if is_up else "DOWN/RED")
-                    return buf.getvalue()
-            except Exception as e:
-                log.warning("রেফারেন্স ফটো টেমপ্লেট লোড ব্যর্থ, সরাসরি আঁকা হচ্ছে: %s", e)
-
-        # ২) হুবহু রেফারেন্স ফটোর পিক্সেল স্পেসিফিকেশনে কার্ড আঁকা
+        # ---- ক্যানভাস + rounded কার্ড ----
         img = Image.new("RGB", (W, H), _hex_to_rgb("#050506"))
         draw = ImageDraw.Draw(img)
         draw.rounded_rectangle(
@@ -2964,29 +2704,431 @@ def generate_price_card_bytes(symbol: str, milestone: float,
         _draw_coin_logo(draw, symbol, logo_cx, logo_cy, logo_radius)
 
         # ---- লোগোর পাশে: নাম → বড় দাম → ফুটার (উপর থেকে নিচে) ----
-        draw.text((text_x, 52), meta["name"], font=f_name, fill="#FFFFFF")
-        draw.text((text_x, y_price), price_text, font=f_price,
+        y = 52
+        draw.text((text_x, y), meta["name"], font=f_name, fill="#FFFFFF")
+        # নামের আসল উচ্চতা বের করে তারপর বড় দাম আঁকা হবে
+        nb = f_name.getbbox(meta["name"])
+        y = 52 + (nb[3] - nb[1]) + 22
+        # বড় মাইলস্টোন দাম — ২৪ঘ % অনুযায়ী রঙ
+        draw.text((text_x, y), price_text, font=f_price,
                   fill=_hex_to_rgb(price_color))
-        # রেফারেন্স ফটোর মতো ফুটারটি ঠিক y=189 পজিশনে থাকবে (কোনো অতিরিক্ত Current লাইন থাকবে না)
-        draw.text((text_x, 189), meta["footer"], font=f_footer,
+        pb = f_price.getbbox(price_text)
+        y += (pb[3] - pb[1]) + 20
+        # ফুটার: BTC PRICE / ETH PRICE — সবসময় ক্যাপিটাল, রঙ #B7B7C0
+        draw.text((text_x, y), meta["footer"], font=f_footer,
                   fill=_hex_to_rgb("#B7B7C0"))
+        # লাইভ দামের ছোট লাইন — বড় সংখ্যাটি মাইলস্টোন বলে বোঝাতে, যাতে
+        # ব্যবহারকারী লাইভ দামের সাথে গুলিয়ে না যায় ("প্রাইস মিস" সমস্যার ফিক্স)
+        if current_price is not None:
+            fb = f_footer.getbbox(meta["footer"])
+            y2 = y + (fb[3] - fb[1]) + 8
+            draw.text((text_x, y2), f"Current: ${current_price:,.0f}",
+                      font=f_footer, fill=_hex_to_rgb("#6E6E78"))
 
-        # ---- ডান দিক: রেফারেন্স ফটোর হুবহু ৪টা নিখুঁত ক্যান্ডেলস্টিক ----
+        # ---- ডান দিক: ৪টা মিনি ক্যান্ডেল (রিয়েল 4h OHLC) ----
         plot_top, plot_bottom = 64, H - 64
         right_edge = W - right_pad - body_half
         centers = [right_edge - (3 - i) * candle_spacing for i in range(4)]
-        _draw_candles(draw, REFERENCE_CANDLES, centers, plot_top, plot_bottom)
+        _draw_candles(draw, candles, centers, plot_top, plot_bottom)
 
         # ---- in-memory PNG bytes ----
         buf = io.BytesIO()
         img.save(buf, format="PNG")
-        log.info("প্রাইস কার্ড রেন্ডার সফল: %s %s (%dx%d, %s)",
+        log.info("প্রাইস কার্ড রেন্ডার সফল: %s %s (%dx%d, ২৪ঘ=%.2f%%)",
                  symbol, price_text, W, H,
-                 "UP/GREEN" if is_up else "DOWN/RED")
+                 pct_24h if pct_24h is not None else float("nan"))
         return buf.getvalue()
     except Exception as e:
         log.exception("প্রাইস কার্ড রেন্ডার ব্যর্থ: %s", e)
         return None   # কলার তখন শুধু টেক্সট পাঠাবে
+
+
+# =============================================================================
+# ৬.১০ ইউএস মার্কেট ওপেন হিটম্যাপ — নিজস্ব রেন্ডারার (কোনো তৃতীয়-পক্ষের
+#     ছবি/সাইট নয় → ব্লক হওয়ার প্রশ্নই নেই)। ডেটা: Yahoo Finance ফ্রি API
+#     (কী/ক্রাম্ব ছাড়া) — ব্রাউজার-UA, সৌজন্য-গ্যাপ, রিট্রাই, অসম্পূর্ণ হলে স্কিপ।
+# =============================================================================
+# সেক্টর ETF (১১টা) ও মেগাক্যাপ (২৪টা) — ছবির জন্য স্থির সেট
+_US_SECTORS = [
+    ("XLK", "TECHNOLOGY"), ("XLF", "FINANCIALS"), ("XLE", "ENERGY"),
+    ("XLV", "HEALTH CARE"), ("XLY", "CONS DISCRETIONARY"),
+    ("XLP", "CONS STAPLES"), ("XLI", "INDUSTRIALS"), ("XLC", "COMM SERVICES"),
+    ("XLU", "UTILITIES"), ("XLRE", "REAL ESTATE"), ("XLB", "MATERIALS"),
+]
+_US_MEGACAPS = ["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META",
+                "TSLA", "AVGO", "BRK-B", "JPM", "LLY", "JNJ",
+                "V", "MA", "WMT", "XOM", "UNH", "HD",
+                "PG", "COST", "ORCL", "BAC", "KO", "NFLX"]
+_US_HTTP_HEADERS = {                     # ডিফল্ট-রিকোয়েস্টের ঘোড়ামার কেউ নয়
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                   "Chrome/124.0 Safari/537.36"),
+    "Accept": "*/*",
+}
+
+
+def _ny_now(now_utc: Optional[datetime] = None) -> tuple:
+    """America/New_York স্থানীয় সময় — tzdata ছাড়াই DST নিয়ম মেনে:
+    মার্চের ২য় রবিবার ০৭:০০ UTC থেকে EST(−৪) — নভেম্বরের ১ম রবিবার
+    ০৬:০০ UTC পর্যন্ত EDT(−৫)। ফেরত: (NY-লোকাল naive datetime, ঘণ্টা offset)।"""
+    now = now_utc or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    now = now.astimezone(timezone.utc)
+    y = now.year
+
+    def nth_sunday(month: int, n: int) -> datetime:
+        first = datetime(y, month, 1, tzinfo=timezone.utc)
+        first_sun = first + timedelta(days=(6 - first.weekday()) % 7)
+        return first_sun + timedelta(weeks=n - 1)
+
+    dst_start = nth_sunday(3, 2).replace(hour=7)      # EST→EDT সীমানা
+    dst_end = nth_sunday(11, 1).replace(hour=6)       # EDT→EST সীমানা
+    offset = -4 if dst_start <= now < dst_end else -5
+    ny = (now + timedelta(hours=offset)).replace(tzinfo=None)
+    return ny, offset
+
+
+def _market_open_window(now_ny: datetime) -> bool:
+    """NY সময়ে ৯:৩০–১০:৩০ (কনফিগযোগ্য), শুক্র/শনি/রবি বাদ — US_MARKET_DAYS
+    = "monday" দিলে শুধু সোমবার (৯:৩১ কোড-নিউজ-ওয়ার্ডিং অনুযায়ী)।
+    একই ফাংশনে কনফিগ বন্ধ = পুরো ফিচার বন্ধ।"""
+    if not Config.US_MARKET_ALERT_ENABLED:
+        return False
+    wd = now_ny.weekday()                              # Mon=0 … Sun=6
+    if Config.US_MARKET_DAYS == "monday":
+        if wd != 0:
+            return False
+    elif wd >= 5:
+        return False
+    t = now_ny.hour * 60 + now_ny.minute
+    sh, sm = Config.US_MARKET_OPEN_START
+    eh, em = Config.US_MARKET_OPEN_END
+    return (sh * 60 + sm) <= t < (eh * 60 + em)
+
+
+def _fetch_chart_pct(symbol: str, headers: dict) -> tuple:
+    """এক সিম্বলের ২৪ঘ% ও দাম (Yahoo v8 chart — কোনো কী/ক্রাম্ব নেই)।
+    ব্যর্থ = (None, None); একবার রিট্রাই সহ — দিনে একটা ছোট ব্যাচ, ব্লকের ঝুঁকি ক্ষুদ্র।"""
+    url = (f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+           f"?range=1d&interval=1d")
+    for attempt in range(2):
+        try:
+            r = requests.get(url, headers=headers, timeout=10)
+            r.raise_for_status()
+            meta = r.json()["chart"]["result"][0]["meta"]
+            price = float(meta["regularMarketPrice"])
+            prev = float(meta.get("chartPreviousClose")
+                         or meta.get("previousClose") or 0)
+            if prev > 0:
+                return round((price / prev - 1.0) * 100.0, 2), price
+            return None, price
+        except Exception as e:
+            if attempt == 0:
+                time.sleep(0.8)                        # ছোট ব্যাকঅফ → রিট্রাই
+            else:
+                log.debug("Yahoo ফেচ ব্যর্থ (%s): %s", symbol, e)
+    return None, None
+
+
+def fetch_us_market_data() -> Optional[dict]:
+    """মার্কেট-ওপেনের পুরো ডেটা-সেট। ধাপ: (১) SPY আগে — marketState REGULAR
+    না হলে (রবিবার/ছুটি) এখানেই থামে = শুধু ১টাই রিকোয়েস্ট; (২) ১১ সেক্টর ETF;
+    (৩) ২৪ মেগাক্যাপ — প্রতিটির মাঝে ০.৩s গ্যাপ (রেট-লিমিট/ব্লক এড়াতে)।
+    সেক্টর ≥৮/১১ ও মেগাক্যাপ ≥১৬/২৪ সফল না হলে None — ভুল/আংশিক তথ্য যাবে না।"""
+    headers = _US_HTTP_HEADERS
+    # ধাপ ১: SPY — বাজার এখন REGULAR-এ আছে কিনা (ছুটির দিন ধরতে এই গেট)
+    try:
+        r = requests.get(
+            "https://query1.finance.yahoo.com/v8/finance/chart/SPY"
+            "?range=1d&interval=1d", headers=headers, timeout=10)
+        r.raise_for_status()
+        spy_meta = r.json()["chart"]["result"][0]["meta"]
+    except Exception as e:
+        log.warning("Yahoo SPY ফেচ ব্যর্থ — মার্কেট পোস্ট স্কিপ: %s", e)
+        return None
+    if spy_meta.get("marketState") != "REGULAR":
+        log.info("ইউএস বাজার এখন ওপেন নয় (%s) — স্কিপ",
+                 spy_meta.get("marketState"))
+        return None
+    # ধাপ ২: সেক্টর ETF
+    sectors = []
+    for sym, name in _US_SECTORS:
+        pct, _price = _fetch_chart_pct(sym, headers)
+        sectors.append({"sym": sym, "name": name, "pct": pct})
+        time.sleep(0.3)                                # সৌজন্য-গ্যাপ
+    time.sleep(0.4)
+    # ধাপ ৩: মেগাক্যাপ
+    megas = []
+    for sym in _US_MEGACAPS:
+        pct, price = _fetch_chart_pct(sym, headers)
+        megas.append({"sym": sym, "pct": pct, "price": price})
+        time.sleep(0.3)
+    ok_s = sum(1 for s in sectors if s["pct"] is not None)
+    ok_m = sum(1 for m in megas if m["pct"] is not None)
+    if ok_s < 8 or ok_m < 16:                          # ~৭০%+ না হলে অসম্পূর্ণ
+        log.warning("মার্কেট ডেটা অসম্পূর্ণ (সেক্টর %d/১১, মেগা %d/২৪) — স্কিপ",
+                    ok_s, ok_m)
+        return None
+    return {"state": "REGULAR", "sectors": sectors, "megas": megas}
+
+
+_MARKET_PROMPT = """তুমি ক্রিপ্টো ও গ্লোবাল মার্কেট অ্যানালিস্ট। এখন ইউএস বাজার খুলেছে।
+সেক্টর: {sectors}
+টপ গেইনার: {gainers}
+টপ লুজার: {losers}
+বাংলায় সংক্ষিপ্ত বিশ্লেষণ লেখো — সর্বোচ্চ ২৫০ অক্ষর, ৩-৪টি ছোট লাইনে:
+কোন দিক শক্ত/দুর্বল, টাকা কোথায় গেছে, বিটকয়েন/ক্রিপ্টোতে কী প্রভাব পড়তে পারে।
+শুধু বিশ্লেষণের লেখা ফেরত দাও — কোনো শিরোনাম, বুলেট-চিহ্ন বা কোড ছাড়া।"""
+
+
+def _market_analysis_text(data: dict) -> str:
+    """জেমিনি বিশ্লেষণ (স্ট্যান্ডার্ড প্রম্পট-টান-মার্সের প্রোটোকল, শুধু
+    বিষয়টা মার্কেট) — জেমিনি ফেল দিলে ডেটা থেকেই টেমপ্লেট লাইন বানায়,
+    তাই অ্যালার্ট কখনো দেরি/আটকে যাবে না (ফলব্যাক শৈলী = সদ্য অনুমোদিত)।"""
+    secs = sorted([s for s in data["sectors"] if s["pct"] is not None],
+                  key=lambda s: -s["pct"])
+    meg = sorted([m for m in data["megas"] if m["pct"] is not None],
+                 key=lambda m: -m["pct"])
+    sectors_txt = ", ".join(f"{s['sym']} {s['pct']:+.2f}%" for s in secs)
+    gain_txt = ", ".join(f"{m['sym']} {m['pct']:+.2f}%" for m in meg[:5])
+    loss_txt = ", ".join(f"{m['sym']} {m['pct']:+.2f}%" for m in meg[-5:][::-1])
+    prompt = _MARKET_PROMPT.format(sectors=sectors_txt, gainers=gain_txt,
+                                   losers=loss_txt)
+    analysis = _event_gemini_text(prompt)   # একই জেমিনি-হেল্পার, প্রম্পট আলাদা
+    if not analysis:
+        top = secs[0] if secs else None
+        worst = secs[-1] if secs else None
+        analysis = ("আজ মার্কেটে " +
+                    (f"{top['sym']} নেতৃত্বে {top['pct']:+.2f}% " if top else "") +
+                    "দিকে শক্তি" +
+                    (f"; {worst['sym']} সবচেয়ে দুর্বল ({worst['pct']:+.2f}%)."
+                     if worst else ".") +
+                    " রিস্ক-সেন্টিমেন্টের সাথে সামঞ্জস্য রেখে ক্রিপ্টোতে "
+                    "সতর্ক থাকুন।")
+    return analysis
+
+
+def _build_market_caption(data: dict, analysis: str, day_label: str,
+                          open_bd: str) -> str:
+    """ছবির ক্যাপশন (HTML) — Telegram-এর ১০২৪-অক্ষরের সীমায় ভেতরে বাধ্য;
+    বিশ্লেষণ লম্বা হলে শেষে "…" দিয়ে কেটে ফিট করে (সেকশন নষ্ট হয় না)।"""
+    secs = sorted([s for s in data["sectors"] if s["pct"] is not None],
+                  key=lambda s: -s["pct"])
+    meg = sorted([m for m in data["megas"] if m["pct"] is not None],
+                 key=lambda m: -m["pct"])
+    head = [
+        f"📊 <b>ইউএস মার্কেট ওপেন — {day_label}</b>",
+        f"🕘 <b>BD সময় {open_bd}</b>",
+        "",
+    ]
+    if secs:
+        head.append("🟢 সেক্টরে সবচেয়ে বেশি: " +
+                    " · ".join(f"{s['sym']} {s['pct']:+.2f}%" for s in secs[:3]))
+        head.append("🔴 সেক্টরে সবচেয়ে কম: " +
+                    " · ".join(f"{s['sym']} {s['pct']:+.2f}%" for s in secs[-3:]))
+    if meg:
+        head += ["",
+                 "🏆 <b>টপ গেইনার:</b> " +
+                 " · ".join(f"{m['sym']} {m['pct']:+.2f}%" for m in meg[:4]),
+                 "📉 <b>টপ লুজার:</b> " +
+                 " · ".join(f"{m['sym']} {m['pct']:+.2f}%" for m in meg[-4:][::-1])]
+
+    def compose(an: str) -> str:                       # ফিট-লজিকের সমন্বিত গঠন
+        return "\n".join(head + [
+            "",
+            "💭 " + html_escape(an),
+            "",
+            f"⚠️ এই পিন {Config.US_MARKET_PIN_HOURS} ঘণ্টা পর নিজে থেকেই সরে যাবে।",
+            f'🔔 <b>Follow: <a href="{html_escape(Config.FOLLOW_CHANNEL_URL)}">'
+            "CRYPTO UPDATE</a></b>",
+        ])
+
+    caption = compose(analysis)
+    if len(caption) > 1024:
+        allowed = 1024 - len(compose(""))              # ফিক্সড অংশ বাদে বাজেট
+        if allowed < 60:
+            allowed = 60
+        analysis = analysis[:allowed - 1] + "…"
+        caption = compose(analysis)
+    return caption
+
+
+def generate_market_heatmap_bytes(sectors: List[dict], megas: List[dict],
+                                  day_label: str) -> Optional[bytes]:
+    """Yahoo ডেটা থেকে নিজস্ব Pillow PNG (AI দিয়ে ছবি বদলানো হয় না)। ব্যর্থ হলে
+    None ফেরায়; মার্কেট পোস্টার শুধু ছবি+ক্যাপশন পাঠায়, টেক্সট-ফলব্যাক করে না।"""
+    try:
+        W, H = 1280, 960
+        img = Image.new("RGB", (W, H), (18, 20, 25))
+        d = ImageDraw.Draw(img)
+
+        def _f(sz: int):
+            return get_font(sz)   # সেকশন ৬-এর এমবেডেড DejaVu বোল্ডই — যেকোনো
+            #                     হোস্টে (Railway-সহ) সমানভাবে কাজ করে
+
+        def color_for(pct):
+            """ফিনভিজ-স্টাইল রঙ (ডার্ক ব্যাকগ্রাউন্ড): −৩% লাল ↔ +৩% সবুজ;
+            ছোট পরিবর্তনে ফিকে, বড় হলে তীব্র (ডেমোর হুবহু)।"""
+            if pct is None:
+                return (45, 48, 55)
+            t = max(-1.0, min(1.0, pct / 3.0))
+            dark = (28, 30, 36)
+            target = (0, 200, 83) if t >= 0 else (235, 60, 60)
+            k = 0.25 + 0.75 * abs(t)
+            return tuple(int(dark[i] + (target[i] - dark[i]) * k)
+                         for i in range(3))
+
+        def fit_text(text: str, max_w: int, start: int = 44):
+            """অক্ষর কাটার বদলে সাইজ কমিয়ে বাক্সের মধ্যে নাম বসাও।"""
+            size = start
+            while size > 12:
+                f = _f(size)
+                if d.textbbox((0, 0), text, font=f)[2] <= max_w:
+                    return f
+                size -= 2
+            return _f(12)
+
+        # শিরোনাম
+        d.text((24, 16), "US MARKET HEATMAP — Yahoo Finance", font=_f(30),
+               fill=(255, 255, 255))
+        d.text((24, 56), f"Sectors (ETF) & MegaCaps — {day_label}",
+               font=_f(17), fill=(150, 155, 165))
+
+        # --- সেক্টর গ্রিড (১১টা, ৬ কলাম) ---
+        gy = 92
+        cols, gap = 6, 6
+        tw, th = (W - 48 - gap * (cols - 1)) // cols, 108
+        d.text((24, gy - 2), "SECTORS", font=_f(14), fill=(150, 155, 165))
+        gy += 22
+        for i, (sym, name) in enumerate(_US_SECTORS):
+            r, c = divmod(i, cols)
+            x = 24 + c * (tw + gap)
+            y = gy + r * (th + gap)
+            pct = next((s["pct"] for s in sectors if s["sym"] == sym), None)
+            d.rectangle([x, y, x + tw, y + th], fill=color_for(pct))
+            d.text((x + 8, y + 14), sym, font=fit_text(sym, tw - 16, 40),
+                   fill=(255, 255, 255))
+            lab = f"{pct:+.2f}%" if pct is not None else "—"
+            d.text((x + 8, y + 64), lab, font=_f(24), fill=(255, 255, 255))
+            d.text((x + 8, y + th - 18), name, font=_f(12), fill=(225, 228, 235))
+
+        # --- মেগাক্যাপ গ্রিড (২৪টা, ৬ কলাম × ৪ সারি) ---
+        gy = gy + 2 * (th + gap) + 26
+        d.text((24, gy - 2), "TOP MEGACAPS", font=_f(14), fill=(150, 155, 165))
+        gy += 22
+        th2 = 118
+        for i, sym in enumerate(_US_MEGACAPS):
+            r, c = divmod(i, cols)
+            x = 24 + c * (tw + gap)
+            y = gy + r * (th2 + gap)
+            m = next((m for m in megas if m["sym"] == sym), None)
+            pct = m["pct"] if m else None
+            d.rectangle([x, y, x + tw, y + th2], fill=color_for(pct))
+            d.text((x + 8, y + 16), sym, font=fit_text(sym, tw - 16, 34),
+                   fill=(255, 255, 255))
+            lab = f"{pct:+.2f}%" if pct is not None else "—"
+            d.text((x + 8, y + 68), lab, font=_f(26), fill=(255, 255, 255))
+            price = m.get("price") if m else None
+            if price:
+                d.text((x + 8, y + 98), f"${price:,.2f}", font=_f(14),
+                       fill=(230, 232, 238))
+
+        # --- লেজেন্ড (−৩…+৩%, ডেমোর হুবহু) ---
+        ly = H - 46
+        labels = ["-3%", "-2%", "-1%", "0%", "+1%", "+2%", "+3%"]
+        pcts = [-3, -2, -1, 0, 1, 2, 3]
+        lx = W // 2 - 7 * 44 // 2
+        for lb, pc in zip(labels, pcts):
+            d.rectangle([lx, ly, lx + 42, ly + 26], fill=color_for(pc))
+            d.text((lx + 6, ly + 4), lb, font=_f(14), fill=(255, 255, 255))
+            lx += 44
+
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+    except Exception as e:
+        log.warning("হিটম্যাপ রেন্ডার ব্যর্থ: %s", e)
+        return None
+
+
+def _unpin_expired_market_pins(conn) -> None:
+    """১০ ঘণ্টা (US_MARKET_PIN_HOURS) পুরনো নিজের পিন অটো-সরাও। পিন আগে
+    থেকেই অন্য কেউ সরিয়ে থাকলে ব্যর্থ হলেও ফ্ল্যাগ বন্ধ — বারবার চেষ্টা/লুপ নয়;
+    পরের দিনের নতুন পিন আসলেই পুরনোটা চ্যানেল নিজে থেকে সরিয়ে দেয়।"""
+    if Config.US_MARKET_PIN_HOURS <= 0:
+        return
+    cutoff = time.time() - Config.US_MARKET_PIN_HOURS * 3600
+    rows = conn.execute(
+        "SELECT message_id FROM market_open_posts"
+        " WHERE pinned = 1 AND posted_at <= ?", (cutoff,),
+    ).fetchall()
+    for (mid,) in rows:
+        if unpin_message(mid):
+            log.info("মার্কেট পোস্টের পিন অটো-সরেছে (১০ ঘণ্টা) [msg %s]", mid)
+        else:
+            log.info("পিন আগেই সরানো হয়েছিল/সরল নয় — ফ্ল্যাগ বন্ধ [msg %s]", mid)
+        conn.execute(
+            "UPDATE market_open_posts SET pinned = 0 WHERE message_id = ?", (mid,)
+        )
+    if rows:
+        conn.commit()
+
+
+def check_us_market_open(conn) -> None:
+    """প্রতি মূল-সাইকেলে কল: (১) ১০ ঘণ্টা পুরনো পিন অটো-আনপিন স্বিপ,
+    (২) NY ৯:৩০–১০:৩০ (সোম–শুক্র, US_MARKET_DAYS অনুযায়ী) উইন্ডোতে দিনে
+    একবার হিটম্যাপ-ছবি + বাংলা বিশ্লেষণ → সাইলেন্ট পিন → DB সেভ।
+    ইভেন্টের পিন-জানালা চলাকালীন (stage 1/2) মার্কেট পোস্ট পিন করা হয় না —
+    চ্যানেলে একসাথে ১টাই পিন থাকে বলে ইভেন্টকে অগ্রাধিকার।"""
+    if not Config.US_MARKET_ALERT_ENABLED:
+        return
+    _unpin_expired_market_pins(conn)   # উইন্ডো ছাড়াতেও পিন-স্বিপ চলে
+    now_ny, offset = _ny_now()
+    if not _market_open_window(now_ny):
+        return                          # উইন্ডো/সাপ্তাহিকের বাইরে — কিছুই নয়
+    today = now_ny.date().isoformat()
+    row = conn.execute(
+        "SELECT 1 FROM market_open_posts WHERE day = ?", (today,)
+    ).fetchone()
+    if row:
+        return                          # আজকের পোস্ট হয়ে গেছে (রিস্টার্টেও ডুপ নয়)
+    data = fetch_us_market_data()       # ছুটির দিন মাত্র ১ রিকোয়েস্টেই বন্ধ
+    if not data:
+        return                          # ছুটি/কম-ডেটা/নেট — উইন্ডোভেতে পরের সাইকেলে আবার
+    day_label = (f"{_bn_num(now_ny.day)} {_BD_MONTHS[now_ny.month]} "
+                 f"{_bn_num(now_ny.year)}")
+    open_bd = "রাত ৭:৩০" if offset == -4 else "রাত ৮:৩০"   # DST অনুযায়ী ৯:৩০ ET
+    analysis = _market_analysis_text(data)   # জেমিনি, ফেল হলে ডেটা-টেমপ্লেট
+    caption = _build_market_caption(data, analysis, day_label, open_bd)
+    img = generate_market_heatmap_bytes(data["sectors"], data["megas"], day_label)
+    if not img:
+        log.warning("মার্কেট ছবি তৈরি হয়নি — টেক্সট-ফলব্যাক নয়; পরের সাইকেলে আবার চেষ্টা")
+        return                           # ছবি ছাড়া পোস্ট নয়; তারিখ লেখা হয় না → retry
+    # ঠিক একটি sendPhoto API কল: কোনো অ্যালবাম/গ্রুপ নয়; একই কলেই ক্যাপশন যুক্ত।
+    # ছবি/Telegram ব্যর্থ হলে পোস্ট-ডুপ কী লেখা হয় না — উইন্ডোর মধ্যে retry হবে।
+    mid = send_single_photo(photo_bytes=img, caption=caption,
+                            parse_mode="HTML", filename="us_market_heatmap.png")
+    if not mid:
+        log.warning("মার্কেট ছবি+ক্যাপশন পাঠানো যায়নি — টেক্সট-ফলব্যাক নয়; পরের সাইকেলে retry")
+        return                           # তারিখ লেখা হয় না → retry
+    pinned = 0
+    active_event = conn.execute(
+        "SELECT 1 FROM economic_events WHERE stage IN (1, 2) LIMIT 1"
+    ).fetchone()
+    if active_event:
+        log.info("ইভেন্টের পিন সক্রিয় — মার্কেট পোস্ট পিন ছাড়াই রইল")
+    elif pin_message(mid):
+        pinned = 1
+    else:
+        log.warning("মার্কেট পোস্ট পিন হয়নি (চ্যানেলে 'Pin Messages' অনুমতি দেখুন)")
+    conn.execute(
+        "INSERT INTO market_open_posts (message_id, posted_at, day, pinned)"
+        " VALUES (?,?,?,?)",
+        (int(mid), time.time(), today, pinned),
+    )
+    conn.commit()
+    log.info("📈 ইউএস মার্কেট ওপেন পোস্ট হয়েছে [%s] (পিন=%d)", today, pinned)
 
 
 # =============================================================================
@@ -3016,13 +3158,6 @@ def main() -> None:
         log.info("প্রাইস অ্যালার্ট থ্রেড শুরু হয়েছে (daemon)")
     else:
         log.info("প্রাইস অ্যালার্ট বন্ধ আছে (ENABLE_PRICE_ALERTS=False)")
-
-    # ইকোনমিক ইভেন্ট অ্যালার্ট — আলাদা ফাস্ট ডাইমন থ্রেড (যাতে ৬:৩০-এর ইভেন্ট ঠিক ৬:৩০-এই ইনস্ট্যান্ট যায়)
-    t_ev = threading.Thread(
-        target=event_alert_loop, daemon=True, name="event-alert"
-    )
-    t_ev.start()
-    log.info("ইকোনমিক ইভেন্ট ইনস্ট্যান্ট অ্যালার্ট থ্রেড শুরু হয়েছে (daemon)")
 
     # সিড টেস্ট সম্পূর্ণ বন্ধ — main() থেকে কখনো কল হবে না
     if Config.ENABLE_SEED_TEST:
@@ -3057,6 +3192,18 @@ def main() -> None:
             delete_expired_natural_posts(conn)
         except Exception as e:
             log.exception("ন্যাচারাল-ডিলিট চেকে এক্সেপশন — পরের সাইকেলে চলছি: %s", e)
+
+        # সকালের ডাইজেস্ট — BD সকালে আজকের ইভেন্ট-তালিকা/হার্টবিট (দিনে একবার)
+        try:
+            check_morning_digest(conn)
+        except Exception as e:
+            log.exception("সকালের-ডাইজেস্ট চেকে এক্সেপশন — পরের সাইকেলে চলছি: %s", e)
+
+        # ইউএস মার্কেট ওপেন হিটম্যাপ পোস্ট + ১০ ঘণ্টা পর পিন অটো-সরানো
+        try:
+            check_us_market_open(conn)
+        except Exception as e:
+            log.exception("মার্কেট-হিটম্যাপ চেকে এক্সেপশন — পরের সাইকেলে চলছি: %s", e)
 
         # সাইকেল শেষে POLL_INTERVAL থেকে elapsed বাদ; বাকি ঘুম (ন্যূনতম ৫ সেকেন্ড)
         elapsed = time.time() - cycle_start
