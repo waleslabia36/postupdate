@@ -47,6 +47,7 @@ import hashlib
 import logging
 import sqlite3
 import threading
+from difflib import SequenceMatcher
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode  # লিংক নরমালাইজের জন্য
 from html import escape as html_escape          # HTML ক্যাপশনে বিশেষ চিহ্ন এস্কেপ করার জন্য
@@ -1233,17 +1234,28 @@ def title_is_duplicate(conn, title: str) -> bool:
     return False
 
 
+def _normalized_headline(text: str) -> str:
+    """বাংলা/ইংরেজি হেডলাইন থেকে ইমোজি-যতিচিহ্ন সরিয়ে তুলনাযোগ্য লেখা বানায়।"""
+    return re.sub(r"[^\w\u0980-\u09FF]+", " ", (text or "").lower(),
+                  flags=re.UNICODE).strip()
+
+
 def is_similar_to_recent(conn, headline: str) -> bool:
-    """🔴 ডুপ্লিকেটের ৩ নম্বর স্তর: সর্বশেষ SIMILARITY_WINDOW (১০০) টা
-    পোস্টকরা (posted=1) বাংলা হেডলাইনের সাথে TF-IDF vectorize + cosine
-    similarity; কোনো একটার সাথে মিল SIMILARITY_THRESHOLD (৭০%) বা বেশি
-    হলে ডুপ্লিকেট ধরে বাদ দেয় (DB-তে posted=0 হিসেবে সেভ থাকে)।"""
+    """সাম্প্রতিক পোস্টে ডুপ্লিকেট আটকায়: আগে স্বাভাবিকীকৃত বাংলা হেডলাইন
+    SequenceMatcher (≥৭০%) দিয়ে মেলায়, তারপর TF-IDF cosine চেক। একই বাংলা
+    শিরোনামে ইমোজি/যতিচিহ্ন বা সামান্য ফারাক থাকলেও সরাসরি-মিল গেট কাজ করে।"""
+    rows = conn.execute(
+        "SELECT headline_bn FROM posted_items WHERE posted = 1 "
+        "ORDER BY id DESC LIMIT ?",
+        (Config.SIMILARITY_WINDOW,),
+    ).fetchall()
+    cand_norm = _normalized_headline(headline)
+    for (stored_headline,) in rows:
+        stored_norm = _normalized_headline(stored_headline)
+        if cand_norm and stored_norm and SequenceMatcher(
+                None, cand_norm, stored_norm).ratio() >= Config.SIMILARITY_THRESHOLD:
+            return True
     if not _SKLEARN_OK:
-        # sklearn না থাকলে সিমিলারিটি চেক চালু হবে না — লিংক-হ্যাশ ডুপ্লিকেট
-        # চেক তবু কাজ করবে (একবারই লগ হবে)
-        if not getattr(is_similar_to_recent, "_warned", False):
-            log.warning("scikit-learn নেই — সেমান্টিক ডুপ্লিকেট চেক বন্ধ থাকবে")
-            is_similar_to_recent._warned = True
         return False
 
     rows = conn.execute(
