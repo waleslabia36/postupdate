@@ -155,7 +155,7 @@ class Config:
 
     # ---- ইউএস মার্কেট ওপেন হিটম্যাপ অ্যালার্ট ----
     US_MARKET_ALERT_ENABLED = True
-    US_MARKET_DAYS = "weekdays"      # "weekdays" = সোম–শুক্র; শুধু সোম চাইলে "monday"
+    US_MARKET_DAYS = "monday"        # উইকএন্ডের পর সোমবারের ওপেন-ডে; weekdays চাইলে বদলান
     US_MARKET_OPEN_START = (9, 30)   # NY সকাল ৯:৩০ (BD রাত ৭:৩০ গ্রীষ্মে / ৮:৩০ শীতে)
     US_MARKET_OPEN_END = (10, 30)    # এই উইন্ডোর বাইরে চেক নয়; ছুটির দিনে স্কিপ
     US_MARKET_PIN_HOURS = 10         # পোস্টের ১০ ঘণ্টা পর পিন অটো-সরবে
@@ -1857,86 +1857,79 @@ def check_flash_drop(conn, symbol: str, snap: dict) -> None:
 
 
 def check_price_milestone(conn, symbol: str) -> None:
-    """একটি সিম্বলের বর্তমান দাম নিয়ে মাইলস্টোন লজিক চালায় (খুবই গুরুত্বপূর্ণ):
-
-    milestone = floor(price / step) * step   (BTC step=500, ETH step=50)
-
-    - কোনো রেকর্ড না থাকলে (প্রথমবার ট্র্যাক): শুধু বেসলাইন সেভ, কোনো অ্যালার্ট নয়
-      → বট স্টার্ট হওয়ামাত্র অতীতের মাইলস্টোনে ভুয়া অ্যালার্ট যাওয়া বন্ধ
-    - milestone == last_milestone: একই বাকেটে ঘোরাঘুরি — কিছুই নয়
-    - বদলালে: সবসময় আগে DB আপডেট, তারপর ২৪ ঘণ্টা কুলডাউন চেক,
-      কুলডাউনে না থাকলে অ্যালার্ট পাঠিয়ে কুলডাউন টাইমস্ট্যাম্প সেভ
-    """
-    snap = get_market_snapshot(symbol)   # এক-ফেচ স্ন্যাপশট: দাম + ২৪ঘ% + ক্যান্ডেল
+    """দামের প্রতিটি অতিক্রান্ত $৫০০/$৫০ গ্রিড-লেভেলে আলাদা অ্যালার্ট।
+    বড় লাফে মাঝের লেভেল বাদ যায় না; একই লেভেলে ২৪ ঘণ্টা কুলডাউন থাকে।"""
+    snap = get_market_snapshot(symbol)
     price = snap["price"]
     if price is None:
-        return   # দাম পাওয়া যায়নি — এই চেক স্কিপ (ক্র্যাশ নয়)
+        return
 
-    # ফ্ল্যাশ-ক্র্যাশ চেক: মাইলস্টোন-লজিকের আগে, নিজস্ব কুলডাউনে — তাই
-    # try/except দিয়ে আলাদা করা, যাতে ফ্ল্যাশের কোনো সমস্যায় মাইলস্টোন না আটকে
     try:
         check_flash_drop(conn, symbol, snap)
     except Exception as e:
         log.warning("ফ্ল্যাশ-ড্রপ চেক ব্যর্থ [%s]: %s", symbol, e)
 
     step = SYMBOL_STEPS[symbol]
-    milestone = math.floor(price / step) * step   # নিচের দিকে রাউন্ডড বাকেট
-
+    current_bucket = math.floor(price / step) * step
     row = conn.execute(
-        "SELECT last_milestone FROM price_milestones WHERE symbol = ?",
+        "SELECT last_milestone, last_price FROM price_milestones WHERE symbol = ?",
         (symbol,),
     ).fetchone()
-
-    # --- স্টার্টআপ স্প্যাম বন্ধ: প্রথমবার দেখলে শুধু বেসলাইন ---
     if row is None:
-        _save_milestone_baseline(conn, symbol, milestone, price)
+        _save_milestone_baseline(conn, symbol, current_bucket, price)
         log.info("মাইলস্টোন বেসলাইন সেভ [%s]: %s (কোনো অ্যালার্ট নয়)",
-                 symbol, f"${milestone:,.0f}")
+                 symbol, f"${current_bucket:,.0f}")
         return
 
     last_milestone = float(row[0])
-    if milestone == last_milestone:
-        return   # একই বাকেট — কিছুই করার নেই
-
-    # --- মাইলস্টোন বদলেছে: দিক বের করো, আর নতুন ভ্যালু সবসময় আগেই আপডেট ---
-    is_up = milestone > last_milestone
-    _save_milestone_baseline(conn, symbol, milestone, price)   # কুলডাউনে থাকলেও
-
-    # --- ২৪ ঘণ্টা কুলডাউন (DB-তে persist) ---
-    if _milestone_in_cooldown(conn, symbol, milestone):
-        log.info("কুলডাউনে — অ্যালার্ট স্কিপ [%s %s]", symbol, f"${milestone:,.0f}")
+    # আগের ইনস্টলেশনের কোনো row-তে last_price অনুপস্থিত হলে সংরক্ষিত বাকেটকে
+    # বেসলাইন ধরা হয়; পরের সফল সাইকেল থেকেই নির্ভুল last_price সেভ হবে।
+    previous_price = float(row[1]) if len(row) > 1 and row[1] is not None else last_milestone
+    if price == previous_price:
         return
 
-    # --- অ্যালার্ট পাঠাও ---
-    caption = build_milestone_caption(symbol, milestone, is_up)
+    if price > previous_price:
+        first = math.floor(previous_price / step) + 1
+        last = math.floor(price / step)
+        crossed = [(level * step, True) for level in range(first, last + 1)]
+    else:
+        first = math.ceil(previous_price / step) - 1
+        last = math.ceil(price / step)
+        crossed = [(level * step, False) for level in range(first, last - 1, -1)]
 
-    # কার্ড (Pillow PNG) — ব্যর্থ হলে শুধু টেক্সট fallback;
-    # দুই ক্ষেত্রেই একই ক্যাপশন + parse_mode="Markdown"
-    card_bytes = None
-    try:
-        card_bytes = generate_price_card_bytes(
-            symbol, milestone, is_up,
-            pct_24h=snap["pct"],          # একই স্ন্যাপশটের ২৪ঘ% (রঙ)
-            candles=snap["candles"],      # একই স্ন্যাপশটের ক্যান্ডেল
-            current_price=price,          # ফুটারে লাইভ দাম (মাইলস্টোন vs লাইভ বোঝাতে)
-        )
-    except Exception as e:
-        log.warning("প্রাইস কার্ড রেন্ডার এক্সেপশন: %s", e)
+    # সব অতিক্রান্ত ধাপ ক্রমানুসারে পাঠাও। কোনো একটি পাঠানো ব্যর্থ হলে
+    # বেসলাইন এগোয় না; পরের সাইকেলে না-পাঠানো ধাপগুলো আবার চেষ্টা হবে।
+    for milestone, is_up in crossed:
+        milestone = float(milestone)
+        if _milestone_in_cooldown(conn, symbol, milestone):
+            log.info("কুলডাউনে — অ্যালার্ট স্কিপ [%s %s]", symbol, f"${milestone:,.0f}")
+            continue
+        caption = build_milestone_caption(symbol, milestone, is_up)
+        card_bytes = None
+        try:
+            card_bytes = generate_price_card_bytes(
+                symbol, milestone, is_up, pct_24h=snap["pct"],
+                candles=snap["candles"], current_price=price,
+            )
+        except Exception as e:
+            log.warning("প্রাইস কার্ড রেন্ডার এক্সেপশন: %s", e)
 
-    sent = False
-    if card_bytes:
-        sent = send_single_photo(
-            photo_bytes=card_bytes, caption=caption, parse_mode="Markdown",
-            filename=f"{symbol}_milestone.png",
-        )
-    if not sent:
-        sent = send_text_message(caption, parse_mode="Markdown")
-
-    if sent:
+        sent = False
+        if card_bytes:
+            sent = send_single_photo(
+                photo_bytes=card_bytes, caption=caption, parse_mode="Markdown",
+                filename=f"{symbol}_milestone.png",
+            )
+        if not sent:
+            sent = send_text_message(caption, parse_mode="Markdown")
+        if not sent:
+            log.warning("অ্যালার্ট পাঠানো যায়নি — পরে আবার চেষ্টা [%s $%s]",
+                        symbol, f"{milestone:,.0f}")
+            return
         record_milestone_alert(conn, symbol, milestone)
         log.info("🚨 প্রাইস অ্যালার্ট পাঠানো হয়েছে: %s", caption)
-    else:
-        log.warning("অ্যালার্ট পাঠানো যায়নি (কুলডাউন সেভ হয়নি — পরে আবার চেষ্টা)")
+
+    _save_milestone_baseline(conn, symbol, current_bucket, price)
 
 
 def price_alert_loop() -> None:
